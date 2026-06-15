@@ -81,7 +81,7 @@ function chosenBookHtml(cb) {
   const name   = escHtml(getMember(cb.memberId)?.name ?? '?');
   const title  = escHtml(cb.title);
   const author = cb.author ? ` <span class="chosen-author">by ${escHtml(cb.author)}</span>` : '';
-  return `<strong>${name}</strong> — "${title}"${author}`;
+  return `<strong>${name}</strong> - "${title}"${author}`;
 }
 
 // ── Weight Calculation ───────────────────────────────────
@@ -119,7 +119,7 @@ function computeWeights() {
       selectionMult = 1 - Math.exp(-lastPickedIdx / SELECTION_HALFLIFE);
     }
 
-    const weight = attendanceScore * selectionMult;  // 0 if selectionMult=0
+    const weight = Math.pow(attendanceScore, 0.5) * selectionMult;  // sqrt compresses attendance range
 
     return {
       memberId,
@@ -274,7 +274,7 @@ function renderSpin() {
     if (!s.lastPicked) {
       penaltyCell = '100% (never chosen)';
     } else if (s.selectionMult === 0) {
-      penaltyCell = '<span class="wt-zero">0% — chosen last session</span>';
+      penaltyCell = '<span class="wt-zero">0% - chosen last session</span>';
     } else {
       penaltyCell = `${Math.round(s.selectionMult * 100)}% (chosen ${formatDate(s.lastPicked)})`;
     }
@@ -360,7 +360,7 @@ function renderHistory() {
   const sorted = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date));
 
   document.getElementById('tab-history').innerHTML = `
-    <h2>History</h2>
+    <h2>Meeting History</h2>
     <div class="add-meeting-bar">
       <input type="date" id="new-meeting-date" value="${currentDate()}" class="text-input">
       <button class="btn btn-primary" id="add-meeting-btn">Add Past Meeting</button>
@@ -380,7 +380,7 @@ function renderHistory() {
 function renderNextMeetingCard() {
   const chosen    = state.nextMeeting.chosenBook;
   const chosenHtml = chosen
-    ? `<strong>${escHtml(getMember(chosen.memberId)?.name ?? '?')}</strong> — "${escHtml(chosen.title)}"${chosen.author ? ` <span class="chosen-author">by ${escHtml(chosen.author)}</span>` : ''}`
+    ? `<strong>${escHtml(getMember(chosen.memberId)?.name ?? '?')}</strong> - "${escHtml(chosen.title)}"${chosen.author ? ` <span class="chosen-author">by ${escHtml(chosen.author)}</span>` : ''}`
     : '<em>Not yet spun</em>';
 
   if (!nextMeetingExpanded) {
@@ -388,7 +388,7 @@ function renderNextMeetingCard() {
       <div class="hc hc-next">
         <div class="hc-top">
           <div class="hc-date">Next Meeting</div>
-          <button class="btn btn-sm btn-primary" data-action="next-happened">Meeting happened ✓</button>
+          <button class="btn btn-sm btn-primary" data-action="next-happened">Meeting happened</button>
         </div>
         <div class="hc-chosen">📖 ${chosenHtml}</div>
       </div>`;
@@ -396,7 +396,7 @@ function renderNextMeetingCard() {
 
   const sortedMembers = [...state.members].sort((a, b) => a.name.localeCompare(b.name));
 
-  const memberOptions = `<option value="">— none —</option>` +
+  const memberOptions = `<option value="">- none -</option>` +
     sortedMembers.map(m => {
       const sel = chosen?.memberId === m.id ? 'selected' : '';
       return `<option value="${m.id}" ${sel}>${escHtml(m.name)}</option>`;
@@ -421,7 +421,7 @@ function renderNextMeetingCard() {
       <div class="edit-section-label">Who attended</div>
       <div class="member-grid">${checkboxes}</div>
       <div class="edit-field-row">
-        <label>Book chosen</label>
+        <label>Chosen by</label>
         <select id="next-winner" class="text-input">${memberOptions}</select>
       </div>
       <div class="edit-field-row">
@@ -435,7 +435,7 @@ function renderNextMeetingCard() {
                value="${escHtml(chosen?.author ?? '')}" placeholder="Author…" style="flex:1">
       </div>
       <div class="action-row">
-        <button class="btn btn-success" data-action="next-save">Save to History</button>
+        <button class="btn btn-success" data-action="next-save">Save</button>
         <button class="btn" data-action="next-cancel">Cancel</button>
       </div>
     </div>`;
@@ -498,7 +498,7 @@ function renderEditCard(m) {
           <span class="mc-book">${escHtml(mem.currentBook || '')}</span>
         </label>`).join('');
 
-  const memberOptions = `<option value="">— none —</option>` +
+  const memberOptions = `<option value="">- none -</option>` +
     sortedMembers.map(mem =>
       `<option value="${mem.id}" ${mem.id === chosenMemberId ? 'selected' : ''}>${escHtml(mem.name)}</option>`
     ).join('');
@@ -512,7 +512,7 @@ function renderEditCard(m) {
       <div class="edit-section-label">Who attended</div>
       <div class="member-grid">${checkboxes}</div>
       <div class="edit-field-row">
-        <label>Book chosen</label>
+        <label>Chosen by</label>
         <select id="edit-winner" class="text-input">${memberOptions}</select>
       </div>
       <div class="edit-field-row">
@@ -617,7 +617,7 @@ function renderMembers() {
 
   document.getElementById('tab-members').innerHTML = `
     <h2>Members</h2>
-    <p class="hint">Book suggestions carry over each session — only update when changing pick. Members without a suggestion are excluded from the spin.</p>
+    <p class="hint">Book suggestions carry over each session - only update when changing pick. Members without a suggestion are excluded from the spin.</p>
     <div class="add-row">
       <input type="text" id="new-member-name" class="text-input" placeholder="Member name…" autocomplete="off">
       <button class="btn btn-primary" id="add-member-btn">Add Member</button>
@@ -665,7 +665,7 @@ function renderMemberRow(m) {
          ${m.bookUpdatedAt ? `<div class="mr-book-meta">Updated ${formatDate(m.bookUpdatedAt)}</div>` : ''}
        </div>
        <button class="btn btn-sm" data-action="edit-member" data-member-id="${m.id}">Edit suggestion</button>`
-    : `<div class="mr-no-book">No suggestion yet — excluded from spin</div>
+    : `<div class="mr-no-book">No suggestion yet - excluded from spin</div>
        <button class="btn btn-sm btn-primary" data-action="edit-member" data-member-id="${m.id}">+ Add suggestion</button>`;
 
   return `
