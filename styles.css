@@ -364,6 +364,8 @@ input[type="month"]:focus,
 .winner-name { font-size: 2.2rem; font-weight: 800; color: var(--primary); margin-bottom: 6px; }
 .winner-book { font-size: 1.15rem; color: var(--muted); font-style: italic; margin-bottom: 20px; }
 .winner-btns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.confirm-row { display: flex; align-items: center; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.confirm-row label { font-size: 0.875rem; color: var(--muted); }
 
 .no-meeting-warning {
   background: #fff8e1;

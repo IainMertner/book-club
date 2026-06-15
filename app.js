@@ -15,9 +15,10 @@ const COLORS = [
 
 // ── State ───────────────────────────────────────────────
 let state = {
-  members:            [],   // { id, name, currentBook, bookUpdatedAt }
-  meetings:           [],   // { id, date, attendees:[id], chosenBook:{memberId,title}|null }
-  currentMeetingDate: null, // "YYYY-MM"
+  members:  [],  // { id, name, currentBook, bookUpdatedAt }
+  meetings: [],  // completed past meetings: { id, date, attendees:[id], chosenBook:{memberId,title} }
+  // The upcoming meeting has no date yet — assigned only when confirmed to history
+  currentMeeting: { attendees: [], chosenBook: null },
 };
 
 // Wheel animation state (not persisted)
@@ -30,8 +31,9 @@ let wheel = {
 // ── Persistence ──────────────────────────────────────────
 function save() {
   localStorage.setItem('bookclub-v1', JSON.stringify({
-    members:  state.members,
-    meetings: state.meetings,
+    members:        state.members,
+    meetings:       state.meetings,
+    currentMeeting: state.currentMeeting,
   }));
 }
 
@@ -40,8 +42,9 @@ function load() {
     const raw = localStorage.getItem('bookclub-v1');
     if (!raw) return;
     const d = JSON.parse(raw);
-    state.members  = d.members  || [];
-    state.meetings = d.meetings || [];
+    state.members        = d.members        || [];
+    state.meetings       = d.meetings       || [];
+    state.currentMeeting = d.currentMeeting || { attendees: [], chosenBook: null };
   } catch (e) {
     console.error('Failed to load data:', e);
   }
@@ -97,16 +100,14 @@ function toast(msg, type = 'info') {
  *
  * Final weight = attendance_score × selection_multiplier (min 0.001).
  */
-function computeWeights(spinDate) {
-  const meeting = getMeeting(spinDate);
-  if (!meeting || meeting.attendees.length === 0) return [];
+function computeWeights() {
+  const attending = state.currentMeeting.attendees;
+  if (attending.length === 0) return [];
 
-  // Past meetings only (strictly before spinDate), newest first
-  const past = state.meetings
-    .filter(m => m.date < spinDate)
-    .sort((a, b) => b.date.localeCompare(a.date));
+  // All completed meetings are "past" relative to the upcoming one, newest first
+  const past = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date));
 
-  const segments = meeting.attendees.map((memberId, idx) => {
+  const segments = attending.map((memberId, idx) => {
     const member = getMember(memberId);
     if (!member) return null;
 
@@ -310,36 +311,19 @@ function renderTab(name) {
 
 // ── Spin Tab ─────────────────────────────────────────────
 function renderSpin() {
-  const sortedMeetings = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date));
+  const attending = new Set(state.currentMeeting.attendees);
+  const segs      = computeWeights();
+  wheel.segments  = segs;
+  const result    = state.currentMeeting.chosenBook;
 
-  // Default to most recent meeting with attendees but no result yet, else just most recent
-  if (!state.currentMeetingDate || !getMeeting(state.currentMeetingDate)) {
-    const candidate = sortedMeetings.find(m => m.attendees.length > 0 && !m.chosenBook)
-      ?? sortedMeetings[0];
-    state.currentMeetingDate = candidate?.date ?? null;
-  }
-
-  const date    = state.currentMeetingDate;
-  const meeting = date ? getMeeting(date) : null;
-  const segs    = date ? computeWeights(date) : [];
-  wheel.segments = segs;
-
-  const meetingOptions = sortedMeetings.map(m =>
-    `<option value="${m.date}" ${m.date === date ? 'selected' : ''}>
-      ${formatDate(m.date)}${m.chosenBook ? ' ✓' : ''}
-    </option>`
-  ).join('');
-
-  let resultBanner = '';
-  if (meeting?.chosenBook) {
-    const name = escHtml(getMember(meeting.chosenBook.memberId)?.name ?? '?');
-    const book = escHtml(meeting.chosenBook.title);
-    resultBanner = `
-      <div class="result-banner">
-        ✓ Recorded: <strong>${name}</strong> — "${book}"
-        <button class="btn btn-sm btn-ghost" id="clear-result-btn">Clear</button>
-      </div>`;
-  }
+  const checkboxes = state.members.length === 0
+    ? '<p class="empty">No members yet — add some in Members.</p>'
+    : state.members.map(m => `
+        <label class="member-card ${attending.has(m.id) ? 'checked' : ''}">
+          <input type="checkbox" name="attending" value="${m.id}" ${attending.has(m.id) ? 'checked' : ''}>
+          <span class="mc-name">${escHtml(m.name)}</span>
+          <span class="mc-book">${escHtml(m.currentBook || '')}</span>
+        </label>`).join('');
 
   const weightRows = segs.map(s => {
     const pct     = Math.round(s.normalizedWeight * 100);
@@ -350,70 +334,95 @@ function renderSpin() {
       <tr>
         <td class="wt-name"><span class="wt-swatch" style="background:${s.color}"></span>${escHtml(s.name)}</td>
         <td class="wt-book" title="${escHtml(s.book)}">${escHtml(s.book)}</td>
-        <td title="Higher = attends more often and more recently">${s.attendanceScore}</td>
+        <td>${s.attendanceScore}</td>
         <td>${penalty}</td>
         <td class="wt-pct">${pct}%</td>
       </tr>`;
   }).join('');
 
-  const noMeetings = sortedMeetings.length === 0;
-  const noAttendees = meeting && meeting.attendees.length === 0;
+  const resultPanel = result ? `
+    <div class="spin-result-panel">
+      <p class="winner-label">This session's book…</p>
+      <div class="winner-name">${escHtml(getMember(result.memberId)?.name ?? '?')}</div>
+      <div class="winner-book">"${escHtml(result.title)}"</div>
+      <div class="confirm-row">
+        <label for="confirm-date">Meeting date:</label>
+        <input type="date" id="confirm-date" value="${currentDate()}" class="text-input">
+        <button class="btn btn-success" id="confirm-btn">✓ Save to History</button>
+      </div>
+      <div class="winner-btns" style="margin-top:10px">
+        <button class="btn btn-sm" id="spin-again-btn">Spin Again</button>
+        <button class="btn btn-sm btn-ghost" id="clear-result-btn">Clear result</button>
+      </div>
+    </div>` : '';
 
   document.getElementById('tab-spin').innerHTML = `
-    <h2>Spin</h2>
-    ${noMeetings
-      ? '<p class="empty">No meetings yet — add one in History.</p>'
-      : `<div class="field-row" style="margin-bottom:20px">
-           <label for="spin-meeting-select">Meeting:</label>
-           <select id="spin-meeting-select" class="text-input">${meetingOptions}</select>
-         </div>
-         ${noAttendees ? '<div class="no-meeting-warning">⚠ No attendance recorded for this meeting — edit it in History.</div>' : ''}
-         ${resultBanner}
-         <div class="spin-layout">
-           <div class="wheel-side">
-             <div class="wheel-container">
-               <div class="wheel-pointer">▼</div>
-               <canvas id="wheel-canvas" width="360" height="360"></canvas>
-             </div>
-             <button class="btn-spin" id="spin-btn" ${segs.length === 0 ? 'disabled' : ''}>SPIN!</button>
-           </div>
-           <div class="weights-side">
-             <h3>Eligible Members & Weights</h3>
-             ${segs.length === 0
-               ? '<p class="empty">Nobody eligible for this meeting.</p>'
-               : `<table class="weight-table">
-                   <thead>
-                     <tr>
-                       <th>Member</th><th>Book</th><th>Attend. score</th><th>Recency penalty</th><th>Chance</th>
-                     </tr>
-                   </thead>
-                   <tbody>${weightRows}</tbody>
-                 </table>
-                 <p class="hint" style="margin-top:10px">
-                   <strong>Attend. score</strong> = Σ 0.8<sup>sessions ago</sup> for each past meeting attended
-                   (1 = last session, 2 = one before, etc.).<br><br>
-                   <strong>Recency penalty</strong> = multiplied by 1 − e<sup>−sessions/4</sup> if this person's
-                   book was recently chosen (≈22% after 1 session, ≈63% after 4, ≈95% after 12).
-                 </p>`
-             }
-           </div>
-         </div>
-         <div id="spin-result-panel" class="spin-result-panel hidden"></div>`
-    }
+    <h2>Next Meeting</h2>
+    <h3>Who's attending?</h3>
+    <div class="member-grid">${checkboxes}</div>
+    ${attending.size > 0 ? `<p class="hint">${attending.size} member${attending.size !== 1 ? 's' : ''} attending.</p>` : ''}
+    <hr>
+    <div class="spin-layout">
+      <div class="wheel-side">
+        <div class="wheel-container">
+          <div class="wheel-pointer">▼</div>
+          <canvas id="wheel-canvas" width="360" height="360"></canvas>
+        </div>
+        <button class="btn-spin" id="spin-btn" ${segs.length === 0 ? 'disabled' : ''}>SPIN!</button>
+      </div>
+      <div class="weights-side">
+        <h3>Weights</h3>
+        ${segs.length === 0
+          ? '<p class="empty">Tick some members above to see weights.</p>'
+          : `<table class="weight-table">
+              <thead><tr>
+                <th>Member</th><th>Book</th><th>Attend. score</th><th>Recency penalty</th><th>Chance</th>
+              </tr></thead>
+              <tbody>${weightRows}</tbody>
+            </table>
+            <p class="hint" style="margin-top:10px">
+              <strong>Attend. score</strong> = Σ 0.8<sup>sessions ago</sup> per past meeting attended.<br>
+              <strong>Recency penalty</strong> = 1 − e<sup>−sessions/4</sup> if their book was recently chosen.
+            </p>`
+        }
+      </div>
+    </div>
+    ${resultPanel}
   `;
 
-  if (noMeetings) return;
+  // Attendance: auto-save on toggle, re-render to update wheel + weights
+  document.querySelectorAll('[name="attending"]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      // Capture before re-render
+      state.currentMeeting.attendees = Array.from(
+        document.querySelectorAll('[name="attending"]:checked')
+      ).map(c => c.value);
+      save();
+      renderSpin();
+    });
+  });
+
+  // Visual toggle (fires before change re-render, gives instant feedback)
+  document.querySelectorAll('.member-grid .member-card').forEach(card => {
+    card.querySelector('input')?.addEventListener('change', e => {
+      card.classList.toggle('checked', e.target.checked);
+    });
+  });
 
   const canvas = document.getElementById('wheel-canvas');
   if (canvas) drawWheel(canvas.getContext('2d'), segs, wheel.currentAngle);
 
-  document.getElementById('spin-meeting-select')?.addEventListener('change', e => {
-    state.currentMeetingDate = e.target.value;
-    renderSpin();
-  });
   document.getElementById('spin-btn')?.addEventListener('click', startSpin);
+
+  document.getElementById('confirm-btn')?.addEventListener('click', confirmResult);
+  document.getElementById('spin-again-btn')?.addEventListener('click', () => {
+    state.currentMeeting.chosenBook = null;
+    save();
+    startSpin();
+  });
   document.getElementById('clear-result-btn')?.addEventListener('click', () => {
-    if (meeting) { meeting.chosenBook = null; save(); }
+    state.currentMeeting.chosenBook = null;
+    save();
     renderSpin();
   });
 }
@@ -421,47 +430,30 @@ function renderSpin() {
 function startSpin() {
   const canvas = document.getElementById('wheel-canvas');
   if (!canvas || wheel.spinning || wheel.segments.length === 0) return;
-
   document.getElementById('spin-btn').disabled = true;
-  document.getElementById('spin-result-panel').classList.add('hidden');
-
   doSpin(wheel.segments, canvas, winner => {
-    const btn = document.getElementById('spin-btn');
-    if (btn) btn.disabled = false;
-    showSpinResult(winner);
+    // Save result to currentMeeting then re-render to show the confirm panel
+    state.currentMeeting.chosenBook = { memberId: winner.memberId, title: winner.book };
+    save();
+    renderSpin();
   });
 }
 
-function showSpinResult(winner) {
-  const panel = document.getElementById('spin-result-panel');
-  if (!panel) return;
+function confirmResult() {
+  const date = document.getElementById('confirm-date').value;
+  if (!date) { toast('Please pick a date.', 'error'); return; }
+  if (getMeeting(date)) { toast('A meeting already exists on this date.', 'error'); return; }
 
-  panel.classList.remove('hidden');
-  panel.innerHTML = `
-    <p class="winner-label">This month's book is…</p>
-    <div class="winner-name">${escHtml(winner.name)}</div>
-    <div class="winner-book">"${escHtml(winner.book)}"</div>
-    <div class="winner-btns">
-      <button class="btn btn-success" data-action="record" data-mid="${escHtml(winner.memberId)}" data-book="${escHtml(winner.book)}">
-        ✓ Record Result
-      </button>
-      <button class="btn" id="spin-again-btn">Spin Again</button>
-    </div>
-  `;
-
-  panel.querySelector('[data-action="record"]').addEventListener('click', e => {
-    recordResult(e.currentTarget.dataset.mid, e.currentTarget.dataset.book);
+  state.meetings.push({
+    id:         uid(),
+    date,
+    attendees:  [...state.currentMeeting.attendees],
+    chosenBook: { ...state.currentMeeting.chosenBook },
   });
-  panel.querySelector('#spin-again-btn').addEventListener('click', startSpin);
-}
 
-function recordResult(memberId, bookTitle) {
-  const date    = state.currentMeetingDate;
-  const meeting = getMeeting(date);
-  if (!meeting) return;
-  meeting.chosenBook = { memberId, title: bookTitle };
+  state.currentMeeting = { attendees: [], chosenBook: null };
   save();
-  toast('Result recorded!', 'success');
+  toast('Saved to history!', 'success');
   renderSpin();
 }
 
@@ -571,7 +563,6 @@ function renderMeetingCard(m) {
       <div class="hc-top">
         <div class="hc-date">${formatDate(m.date)}</div>
         <div class="hc-btns">
-          <button class="btn btn-sm" data-action="spin" data-id="${m.id}">Spin →</button>
           <button class="btn btn-sm" data-action="edit" data-id="${m.id}">Edit</button>
           <button class="btn btn-sm btn-danger" data-action="delete" data-id="${m.id}">Delete</button>
         </div>
@@ -633,7 +624,6 @@ function attachHistoryEvents() {
     if (action === 'cancel') { editingMeetingId = null; renderHistory(); }
     if (action === 'save')   saveMeetingEdit(id);
     if (action === 'delete') deleteMeeting(id);
-    if (action === 'spin')   goSpinMeeting(id);
   });
 
   list.addEventListener('change', e => {
@@ -686,17 +676,9 @@ function deleteMeeting(id) {
   if (!confirm('Delete this meeting? This cannot be undone.')) return;
   state.meetings = state.meetings.filter(m => m.id !== id);
   if (editingMeetingId === id) editingMeetingId = null;
-  if (state.currentMeetingDate === state.meetings.find(m => m.id === id)?.date)
-    state.currentMeetingDate = null;
   save();
   toast('Meeting deleted.', 'success');
   renderHistory();
-}
-
-function goSpinMeeting(id) {
-  const meeting = state.meetings.find(m => m.id === id);
-  if (meeting) state.currentMeetingDate = meeting.date;
-  switchTab('spin');
 }
 
 // ── Members Tab ───────────────────────────────────────────
@@ -809,7 +791,6 @@ function importData(input) {
 // ── Init ─────────────────────────────────────────────────
 function init() {
   load();
-  state.currentMeetingDate = null; // renderSpin will pick the best default
 
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
