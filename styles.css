@@ -2,7 +2,7 @@
 
 :root {
   --bg: #faf8f5;
-  --surface: #fadddc;
+  --surface: #f9eeee;
   --border: #e2d9ce;
   --primary: #c14756;
   --primary-dark: #a63744;
@@ -445,7 +445,7 @@ input[type="month"]:focus,
 .members-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
 
 .member-row {
-  background: var(--surface);
+  background: var(--success);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -458,7 +458,7 @@ input[type="month"]:focus,
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  background: var(--bg);
+  background: var(--accent);
   border-bottom: 1px solid var(--border);
 }
 

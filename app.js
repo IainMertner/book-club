@@ -9,14 +9,10 @@ const SELECTION_HALFLIFE = 8;   // sessions for penalty to reach ~63% recovery
 const COLORS = [
   '#593F62', '#574B6C', '#555776', '#506F8A',
   '#979FDD', '#9CA8BD', '#A1B09D', '#AAC05C',
-  '#D5D880', '#FFF0A3', '#FFF5E1', '#FFF5E1',
+  '#D5D880',
   '#DAA8AD', '#C88193', '#B55A78', '#874D6D'
 ];
 
-for (let i = COLORS.length - 1; i > 0; i--) {
-  const j = Math.floor(Math.random() * (i + 1));
-  [COLORS[i], COLORS[j]] = [COLORS[j], COLORS[i]];
-}
 
 // ── State ───────────────────────────────────────────────
 let state = {
@@ -101,6 +97,12 @@ function computeWeights() {
   );
   if (eligible.length === 0) return [];
 
+  const shuffledColors = [...COLORS];
+  for (let i = shuffledColors.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffledColors[i], shuffledColors[j]] = [shuffledColors[j], shuffledColors[i]];
+  }
+
   const segments = eligible.map((member, idx) => {
     const memberId = member.id;
 
@@ -133,7 +135,7 @@ function computeWeights() {
       name:            member.name,
       book:            member.currentBook,
       author:          member.currentAuthor || '',
-      color:           COLORS[idx % COLORS.length],
+      color:           shuffledColors[idx % shuffledColors.length],
       attendanceScore: Math.round(attendanceScore * 100) / 100,
       selectionMult:   Math.round(selectionMult * 100) / 100,
       lastPicked:      lastPickedIdx >= 0 ? past[lastPickedIdx].date : null,
