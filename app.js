@@ -7,9 +7,10 @@ const ATTENDANCE_DECAY   = 0.80;
 const SELECTION_HALFLIFE = 8;   // sessions for penalty to reach ~63% recovery
 
 const COLORS = [
-  '#e05c5c','#3b82d6','#44aa72','#f59e0b','#8b5cf6',
-  '#06b6d4','#ef6c00','#d946ef','#14b8a6','#f97316',
-  '#6366f1','#10b981','#f43f5e','#64748b','#7c3aed',
+  '#593F62', '#574B6C', '#555776', '#506F8A',
+  '#979FDD', '#9CA8BD', '#A1B09D', '#AAC05C',
+  '#D5D880', '#FFF0A3', '#FFF5E1', '#FFF5E1',
+  '#DAA8AD', '#C88193', '#B55A78', '#874D6D'
 ];
 
 // ── State ───────────────────────────────────────────────
@@ -89,10 +90,9 @@ function chosenBookHtml(cb) {
 function computeWeights() {
   const past = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date));
 
-  // Eligible: must have a book suggestion AND have attended at least once
+  // Eligible: must have a book suggestion
   const eligible = state.members.filter(m =>
-    m.currentBook && m.currentBook.trim() &&
-    past.some(mt => mt.attendees.includes(m.id))
+    m.currentBook && m.currentBook.trim()
   );
   if (eligible.length === 0) return [];
 
@@ -294,7 +294,6 @@ function renderSpin() {
     </div>` : '';
 
   document.getElementById('tab-spin').innerHTML = `
-    <h2>Spin</h2>
     <div class="spin-center">
       <div class="wheel-container">
         <div class="wheel-pointer">▼</div>
