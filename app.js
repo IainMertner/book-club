@@ -16,10 +16,11 @@ const COLORS = [
 // ── State ───────────────────────────────────────────────
 let state = {
   members:  [],  // { id, name, currentBook, bookUpdatedAt }
-  meetings: [],  // completed past meetings: { id, date, attendees:[id], chosenBook:{memberId,title} }
-  // The upcoming meeting has no date yet — assigned only when confirmed to history
-  currentMeeting: { attendees: [], chosenBook: null },
+  meetings: [],  // { id, date, attendees:[id], chosenBook:{memberId,title} }
 };
+
+// Spin result waiting to be confirmed — not persisted, re-spin if page reloads
+let pendingSpin = null; // { memberId, title }
 
 // Wheel animation state (not persisted)
 let wheel = {
@@ -31,9 +32,8 @@ let wheel = {
 // ── Persistence ──────────────────────────────────────────
 function save() {
   localStorage.setItem('bookclub-v1', JSON.stringify({
-    members:        state.members,
-    meetings:       state.meetings,
-    currentMeeting: state.currentMeeting,
+    members:  state.members,
+    meetings: state.meetings,
   }));
 }
 
@@ -42,9 +42,8 @@ function load() {
     const raw = localStorage.getItem('bookclub-v1');
     if (!raw) return;
     const d = JSON.parse(raw);
-    state.members        = d.members        || [];
-    state.meetings       = d.meetings       || [];
-    state.currentMeeting = d.currentMeeting || { attendees: [], chosenBook: null };
+    state.members  = d.members  || [];
+    state.meetings = d.meetings || [];
   } catch (e) {
     console.error('Failed to load data:', e);
   }
@@ -101,15 +100,13 @@ function toast(msg, type = 'info') {
  * Final weight = attendance_score × selection_multiplier (min 0.001).
  */
 function computeWeights() {
-  const attending = state.currentMeeting.attendees;
-  if (attending.length === 0) return [];
+  if (state.members.length === 0) return [];
 
-  // All completed meetings are "past" relative to the upcoming one, newest first
+  // All recorded meetings are past history, newest first
   const past = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date));
 
-  const segments = attending.map((memberId, idx) => {
-    const member = getMember(memberId);
-    if (!member) return null;
+  const segments = state.members.map((member, idx) => {
+    const memberId = member.id;
 
     // Attendance score: Σ ATTENDANCE_DECAY^sessions_ago for each past meeting attended,
     // where sessions_ago = 1 for the most recent past meeting, 2 for the one before, etc.
@@ -311,19 +308,8 @@ function renderTab(name) {
 
 // ── Spin Tab ─────────────────────────────────────────────
 function renderSpin() {
-  const attending = new Set(state.currentMeeting.attendees);
-  const segs      = computeWeights();
-  wheel.segments  = segs;
-  const result    = state.currentMeeting.chosenBook;
-
-  const checkboxes = state.members.length === 0
-    ? '<p class="empty">No members yet — add some in Members.</p>'
-    : state.members.map(m => `
-        <label class="member-card ${attending.has(m.id) ? 'checked' : ''}">
-          <input type="checkbox" name="attending" value="${m.id}" ${attending.has(m.id) ? 'checked' : ''}>
-          <span class="mc-name">${escHtml(m.name)}</span>
-          <span class="mc-book">${escHtml(m.currentBook || '')}</span>
-        </label>`).join('');
+  const segs = computeWeights();
+  wheel.segments = segs;
 
   const weightRows = segs.map(s => {
     const pct     = Math.round(s.normalizedWeight * 100);
@@ -340,28 +326,33 @@ function renderSpin() {
       </tr>`;
   }).join('');
 
-  const resultPanel = result ? `
+  // Confirm panel: shown after spin, collects date + who actually attended
+  const confirmPanel = pendingSpin ? `
     <div class="spin-result-panel">
       <p class="winner-label">This session's book…</p>
-      <div class="winner-name">${escHtml(getMember(result.memberId)?.name ?? '?')}</div>
-      <div class="winner-book">"${escHtml(result.title)}"</div>
+      <div class="winner-name">${escHtml(getMember(pendingSpin.memberId)?.name ?? '?')}</div>
+      <div class="winner-book">"${escHtml(pendingSpin.title)}"</div>
       <div class="confirm-row">
-        <label for="confirm-date">Meeting date:</label>
+        <label for="confirm-date">Date of meeting:</label>
         <input type="date" id="confirm-date" value="${currentDate()}" class="text-input">
-        <button class="btn btn-success" id="confirm-btn">✓ Save to History</button>
       </div>
-      <div class="winner-btns" style="margin-top:10px">
-        <button class="btn btn-sm" id="spin-again-btn">Spin Again</button>
-        <button class="btn btn-sm btn-ghost" id="clear-result-btn">Clear result</button>
+      <div class="edit-section-label" style="margin-top:16px">Who attended?</div>
+      <div class="member-grid">
+        ${state.members.map(m => `
+          <label class="member-card checked">
+            <input type="checkbox" name="confirm-attendee" value="${m.id}" checked>
+            <span class="mc-name">${escHtml(m.name)}</span>
+            <span class="mc-book">${escHtml(m.currentBook || '')}</span>
+          </label>`).join('')}
+      </div>
+      <div class="winner-btns" style="margin-top:16px">
+        <button class="btn btn-success" id="confirm-btn">✓ Save to History</button>
+        <button class="btn" id="spin-again-btn">Spin Again</button>
       </div>
     </div>` : '';
 
   document.getElementById('tab-spin').innerHTML = `
-    <h2>Next Meeting</h2>
-    <h3>Who's attending?</h3>
-    <div class="member-grid">${checkboxes}</div>
-    ${attending.size > 0 ? `<p class="hint">${attending.size} member${attending.size !== 1 ? 's' : ''} attending.</p>` : ''}
-    <hr>
+    <h2>Spin</h2>
     <div class="spin-layout">
       <div class="wheel-side">
         <div class="wheel-container">
@@ -373,7 +364,7 @@ function renderSpin() {
       <div class="weights-side">
         <h3>Weights</h3>
         ${segs.length === 0
-          ? '<p class="empty">Tick some members above to see weights.</p>'
+          ? '<p class="empty">Add members to start spinning.</p>'
           : `<table class="weight-table">
               <thead><tr>
                 <th>Member</th><th>Book</th><th>Attend. score</th><th>Recency penalty</th><th>Chance</th>
@@ -387,54 +378,34 @@ function renderSpin() {
         }
       </div>
     </div>
-    ${resultPanel}
+    ${confirmPanel}
   `;
-
-  // Attendance: auto-save on toggle, re-render to update wheel + weights
-  document.querySelectorAll('[name="attending"]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      // Capture before re-render
-      state.currentMeeting.attendees = Array.from(
-        document.querySelectorAll('[name="attending"]:checked')
-      ).map(c => c.value);
-      save();
-      renderSpin();
-    });
-  });
-
-  // Visual toggle (fires before change re-render, gives instant feedback)
-  document.querySelectorAll('.member-grid .member-card').forEach(card => {
-    card.querySelector('input')?.addEventListener('change', e => {
-      card.classList.toggle('checked', e.target.checked);
-    });
-  });
 
   const canvas = document.getElementById('wheel-canvas');
   if (canvas) drawWheel(canvas.getContext('2d'), segs, wheel.currentAngle);
 
   document.getElementById('spin-btn')?.addEventListener('click', startSpin);
 
+  // Confirm panel events
+  document.querySelectorAll('[name="confirm-attendee"]').forEach(cb => {
+    cb.addEventListener('change', e => {
+      cb.closest('.member-card').classList.toggle('checked', e.target.checked);
+    });
+  });
   document.getElementById('confirm-btn')?.addEventListener('click', confirmResult);
   document.getElementById('spin-again-btn')?.addEventListener('click', () => {
-    state.currentMeeting.chosenBook = null;
-    save();
+    pendingSpin = null;
     startSpin();
-  });
-  document.getElementById('clear-result-btn')?.addEventListener('click', () => {
-    state.currentMeeting.chosenBook = null;
-    save();
-    renderSpin();
   });
 }
 
 function startSpin() {
   const canvas = document.getElementById('wheel-canvas');
   if (!canvas || wheel.spinning || wheel.segments.length === 0) return;
+  pendingSpin = null;
   document.getElementById('spin-btn').disabled = true;
   doSpin(wheel.segments, canvas, winner => {
-    // Save result to currentMeeting then re-render to show the confirm panel
-    state.currentMeeting.chosenBook = { memberId: winner.memberId, title: winner.book };
-    save();
+    pendingSpin = { memberId: winner.memberId, title: winner.book };
     renderSpin();
   });
 }
@@ -444,14 +415,12 @@ function confirmResult() {
   if (!date) { toast('Please pick a date.', 'error'); return; }
   if (getMeeting(date)) { toast('A meeting already exists on this date.', 'error'); return; }
 
-  state.meetings.push({
-    id:         uid(),
-    date,
-    attendees:  [...state.currentMeeting.attendees],
-    chosenBook: { ...state.currentMeeting.chosenBook },
-  });
+  const attendees = Array.from(
+    document.querySelectorAll('[name="confirm-attendee"]:checked')
+  ).map(cb => cb.value);
 
-  state.currentMeeting = { attendees: [], chosenBook: null };
+  state.meetings.push({ id: uid(), date, attendees, chosenBook: { ...pendingSpin } });
+  pendingSpin = null;
   save();
   toast('Saved to history!', 'success');
   renderSpin();
@@ -482,7 +451,7 @@ function renderBooks() {
   document.getElementById('tab-books').innerHTML = `
     <h2>Book Suggestions</h2>
     <p class="hint">
-      Suggestions carry over each session — members only need to update when they change their pick.
+      Suggestions carry over each session - members only need to update when they change their pick.
     </p>
     ${cards}
   `;
@@ -555,7 +524,7 @@ function renderMeetingCard(m) {
 
   const attendeeNames = m.attendees.map(id => getMember(id)?.name ?? '(removed)').join(', ') || 'Nobody';
   const chosen = m.chosenBook
-    ? `<strong>${escHtml(getMember(m.chosenBook.memberId)?.name ?? '?')}</strong> — "${escHtml(m.chosenBook.title)}"`
+    ? `<strong>${escHtml(getMember(m.chosenBook.memberId)?.name ?? '?')}</strong> - "${escHtml(m.chosenBook.title)}"`
     : '<em>Not yet spun</em>';
 
   return `
@@ -586,7 +555,7 @@ function renderEditCard(m) {
           <span class="mc-book">${escHtml(mem.currentBook || '')}</span>
         </label>`).join('');
 
-  const memberOptions = `<option value="">— none —</option>` +
+  const memberOptions = `<option value="">- none -</option>` +
     state.members.map(mem =>
       `<option value="${mem.id}" ${mem.id === chosenMemberId ? 'selected' : ''}>${escHtml(mem.name)}</option>`
     ).join('');
