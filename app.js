@@ -4,8 +4,7 @@
 
 // ── Config ──────────────────────────────────────────────
 const ATTENDANCE_DECAY   = 0.80;
-const SELECTION_HALFLIFE = 4;
-const FIRST_TIMER_BASE   = 0.30;
+const SELECTION_HALFLIFE = 8;   // sessions for penalty to reach ~63% recovery
 
 const COLORS = [
   '#e05c5c','#3b82d6','#44aa72','#f59e0b','#8b5cf6',
@@ -87,27 +86,40 @@ function chosenBookHtml(cb) {
 
 // ── Weight Calculation ───────────────────────────────────
 function computeWeights() {
-  const eligible = state.members.filter(m => m.currentBook && m.currentBook.trim());
-  if (eligible.length === 0) return [];
-
   const past = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date));
+
+  // Eligible: must have a book suggestion AND have attended at least once
+  const eligible = state.members.filter(m =>
+    m.currentBook && m.currentBook.trim() &&
+    past.some(mt => mt.attendees.includes(m.id))
+  );
+  if (eligible.length === 0) return [];
 
   const segments = eligible.map((member, idx) => {
     const memberId = member.id;
 
-    let attendanceScore = past.reduce((sum, m, i) => {
+    // Attendance score: Σ 0.8^sessions_ago for each attended meeting (always > 0 here)
+    const attendanceScore = past.reduce((sum, m, i) => {
       if (!m.attendees.includes(memberId)) return sum;
       return sum + Math.pow(ATTENDANCE_DECAY, i + 1);
     }, 0);
-    if (attendanceScore === 0) attendanceScore = FIRST_TIMER_BASE;
 
-    const lastPicked = past.find(m => m.chosenBook?.memberId === memberId);
-    let selectionMult = 1.0;
-    if (lastPicked) {
-      selectionMult = 1 - Math.exp(-(past.indexOf(lastPicked) + 1) / SELECTION_HALFLIFE);
+    // Selection multiplier: hard 0 if chosen last session; shifted exponential recovery after that.
+    // Formula: 1 − exp(−(lastPickedIdx) / HALFLIFE), where lastPickedIdx is 0-based index in past[].
+    // lastPickedIdx=0 (chosen most recently) → hard 0 regardless of formula.
+    // lastPickedIdx=1 (2 sessions ago)       → 1 − exp(−1/8) ≈ 12%
+    // lastPickedIdx=7 (8 sessions ago)       → 1 − exp(−7/8) ≈ 58%
+    const lastPickedIdx = past.findIndex(m => m.chosenBook?.memberId === memberId);
+    let selectionMult;
+    if (lastPickedIdx < 0) {
+      selectionMult = 1.0;   // never chosen
+    } else if (lastPickedIdx === 0) {
+      selectionMult = 0;     // chosen last session: ineligible this round
+    } else {
+      selectionMult = 1 - Math.exp(-lastPickedIdx / SELECTION_HALFLIFE);
     }
 
-    const weight = Math.max(attendanceScore * selectionMult, 0.001);
+    const weight = attendanceScore * selectionMult;  // 0 if selectionMult=0
 
     return {
       memberId,
@@ -117,15 +129,18 @@ function computeWeights() {
       color:           COLORS[idx % COLORS.length],
       attendanceScore: Math.round(attendanceScore * 100) / 100,
       selectionMult:   Math.round(selectionMult * 100) / 100,
-      lastPicked:      lastPicked?.date ?? null,
+      lastPicked:      lastPickedIdx >= 0 ? past[lastPickedIdx].date : null,
       weight,
       normalizedWeight: 0,
     };
   });
 
-  const total = segments.reduce((s, r) => s + r.weight, 0);
-  segments.forEach(r => { r.normalizedWeight = r.weight / total; });
-  return segments;
+  // Normalise only among spinnable members (weight > 0); 0-weight members stay in list for display
+  const spinnable = segments.filter(s => s.weight > 0);
+  const total = spinnable.reduce((s, r) => s + r.weight, 0);
+  if (total > 0) spinnable.forEach(r => { r.normalizedWeight = r.weight / total; });
+
+  return segments;  // includes 0-weight members so the table can show why they're excluded
 }
 
 // ── Wheel Drawing ────────────────────────────────────────
@@ -249,23 +264,29 @@ function renderTab(name) {
 
 // ── Spin Tab ─────────────────────────────────────────────
 function renderSpin() {
-  const segs = computeWeights();
-  wheel.segments = segs;
+  const segs     = computeWeights();                       // all eligible (incl. 0-weight)
+  const spinSegs = segs.filter(s => s.weight > 0);        // subset that can actually win
+  wheel.segments = spinSegs;
 
   const weightRows = segs.map(s => {
-    const pct     = Math.round(s.normalizedWeight * 100);
-    const penalty = s.lastPicked
-      ? `${Math.round(s.selectionMult * 100)}% (chosen ${formatDate(s.lastPicked)})`
-      : '100% (never chosen)';
+    const pct = Math.round(s.normalizedWeight * 100);
+    let penaltyCell;
+    if (!s.lastPicked) {
+      penaltyCell = '100% (never chosen)';
+    } else if (s.selectionMult === 0) {
+      penaltyCell = '<span class="wt-zero">0% — chosen last session</span>';
+    } else {
+      penaltyCell = `${Math.round(s.selectionMult * 100)}% (chosen ${formatDate(s.lastPicked)})`;
+    }
     const bookCell = s.author
       ? `${escHtml(s.book)}<br><span class="wt-author">by ${escHtml(s.author)}</span>`
       : escHtml(s.book);
     return `
-      <tr>
+      <tr class="${s.weight === 0 ? 'wt-row-excluded' : ''}">
         <td class="wt-name"><span class="wt-swatch" style="background:${s.color}"></span>${escHtml(s.name)}</td>
         <td class="wt-book" title="${escHtml(s.book)}">${bookCell}</td>
         <td>${s.attendanceScore}</td>
-        <td>${penalty}</td>
+        <td>${penaltyCell}</td>
         <td class="wt-pct">${pct}%</td>
       </tr>`;
   }).join('');
@@ -290,12 +311,12 @@ function renderSpin() {
           <div class="wheel-pointer">▼</div>
           <canvas id="wheel-canvas" width="360" height="360"></canvas>
         </div>
-        <button class="btn-spin" id="spin-btn" ${segs.length === 0 ? 'disabled' : ''}>SPIN!</button>
+        <button class="btn-spin" id="spin-btn" ${spinSegs.length === 0 ? 'disabled' : ''}>SPIN!</button>
       </div>
       <div class="weights-side">
         <h3>Weights</h3>
         ${segs.length === 0
-          ? '<p class="empty">Members need a book suggestion set to enter the draw.</p>'
+          ? '<p class="empty">Members need a book suggestion and at least one past attendance to enter the draw.</p>'
           : `<table class="weight-table">
               <thead><tr>
                 <th>Member</th><th>Book</th><th>Attend. score</th><th>Recency penalty</th><th>Chance</th>
@@ -313,7 +334,7 @@ function renderSpin() {
   `;
 
   const canvas = document.getElementById('wheel-canvas');
-  if (canvas) drawWheel(canvas.getContext('2d'), segs, wheel.currentAngle);
+  if (canvas) drawWheel(canvas.getContext('2d'), spinSegs, wheel.currentAngle);
 
   document.getElementById('spin-btn')?.addEventListener('click', startSpin);
   document.getElementById('spin-again-btn')?.addEventListener('click', () => {
@@ -373,15 +394,17 @@ function renderNextMeetingCard() {
       </div>`;
   }
 
+  const sortedMembers = [...state.members].sort((a, b) => a.name.localeCompare(b.name));
+
   const memberOptions = `<option value="">— none —</option>` +
-    state.members.map(m => {
+    sortedMembers.map(m => {
       const sel = chosen?.memberId === m.id ? 'selected' : '';
       return `<option value="${m.id}" ${sel}>${escHtml(m.name)}</option>`;
     }).join('');
 
-  const checkboxes = state.members.length === 0
+  const checkboxes = sortedMembers.length === 0
     ? '<p class="empty">No members added yet.</p>'
-    : state.members.map(m => `
+    : sortedMembers.map(m => `
         <label class="member-card checked">
           <input type="checkbox" name="next-attendee" value="${m.id}" checked>
           <span class="mc-name">${escHtml(m.name)}</span>
@@ -464,9 +487,11 @@ function renderEditCard(m) {
   const chosenTitle    = m.chosenBook?.title    ?? '';
   const chosenAuthor   = m.chosenBook?.author   ?? '';
 
-  const checkboxes = state.members.length === 0
+  const sortedMembers = [...state.members].sort((a, b) => a.name.localeCompare(b.name));
+
+  const checkboxes = sortedMembers.length === 0
     ? '<p class="empty">No members added yet.</p>'
-    : state.members.map(mem => `
+    : sortedMembers.map(mem => `
         <label class="member-card ${attendeeSet.has(mem.id) ? 'checked' : ''}">
           <input type="checkbox" name="edit-attendee" value="${mem.id}" ${attendeeSet.has(mem.id) ? 'checked' : ''}>
           <span class="mc-name">${escHtml(mem.name)}</span>
@@ -474,7 +499,7 @@ function renderEditCard(m) {
         </label>`).join('');
 
   const memberOptions = `<option value="">— none —</option>` +
-    state.members.map(mem =>
+    sortedMembers.map(mem =>
       `<option value="${mem.id}" ${mem.id === chosenMemberId ? 'selected' : ''}>${escHtml(mem.name)}</option>`
     ).join('');
 

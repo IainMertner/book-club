@@ -499,6 +499,8 @@ input[type="month"]:focus,
 
 .chosen-author { font-size: 0.85em; color: var(--muted); font-style: normal; }
 .wt-author { font-size: 0.78em; color: var(--muted); }
+.wt-row-excluded td { opacity: 0.45; }
+.wt-zero { color: var(--error); font-weight: 600; }
 .winner-author { font-size: 0.95rem; color: var(--muted); margin-top: 4px; }
 
 /* ── Toast ── */
