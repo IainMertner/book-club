@@ -13,6 +13,11 @@ const COLORS = [
   '#DAA8AD', '#C88193', '#B55A78', '#874D6D'
 ];
 
+for (let i = COLORS.length - 1; i > 0; i--) {
+  const j = Math.floor(Math.random() * (i + 1));
+  [COLORS[i], COLORS[j]] = [COLORS[j], COLORS[i]];
+}
+
 // ── State ───────────────────────────────────────────────
 let state = {
   members:     [],  // { id, name, currentBook, currentAuthor, bookUpdatedAt }
@@ -100,7 +105,7 @@ function computeWeights() {
     const memberId = member.id;
 
     // Attendance score: Σ 0.8^sessions_ago for each attended meeting (always > 0 here)
-    const attendanceScore = past.reduce((sum, m, i) => {
+    let attendanceScore = past.reduce((sum, m, i) => {
       if (!m.attendees.includes(memberId)) return sum;
       return sum + Math.pow(ATTENDANCE_DECAY, i + 1);
     }, 0);
