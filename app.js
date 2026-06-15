@@ -3,9 +3,9 @@
 // ──────────────────────────────────────────────────────────
 
 // ── Config ──────────────────────────────────────────────
-const ATTENDANCE_DECAY   = 0.80;  // weight multiplier per session of distance
-const SELECTION_HALFLIFE = 4;     // sessions before selection penalty halves
-const FIRST_TIMER_BASE   = 0.30;  // base score for members with no prior meetings
+const ATTENDANCE_DECAY   = 0.80;
+const SELECTION_HALFLIFE = 4;
+const FIRST_TIMER_BASE   = 0.30;
 
 const COLORS = [
   '#e05c5c','#3b82d6','#44aa72','#f59e0b','#8b5cf6',
@@ -15,19 +15,16 @@ const COLORS = [
 
 // ── State ───────────────────────────────────────────────
 let state = {
-  members:     [],  // { id, name, currentBook, bookUpdatedAt }
-  meetings:    [],  // { id, date, attendees:[id], chosenBook:{memberId,title} }
-  nextMeeting: { chosenBook: null },  // persisted pending spin result
+  members:     [],  // { id, name, currentBook, currentAuthor, bookUpdatedAt }
+  meetings:    [],  // { id, date, attendees:[id], chosenBook:{memberId,title,author} }
+  nextMeeting: { chosenBook: null },
 };
 
 // UI state (not persisted)
-let wheel = {
-  segments:     [],
-  currentAngle: 0,
-  spinning:     false,
-};
+let wheel = { segments: [], currentAngle: 0, spinning: false };
 let editingMeetingId    = null;
-let nextMeetingExpanded = false;  // whether "Meeting happened" form is open
+let editingMemberId     = null;
+let nextMeetingExpanded = false;
 
 // ── Persistence ──────────────────────────────────────────
 function save() {
@@ -51,13 +48,8 @@ function load() {
 
 // ── Utilities ────────────────────────────────────────────
 let _uid = 0;
-function uid() {
-  return `${Date.now().toString(36)}-${(++_uid).toString(36)}`;
-}
-
-function currentDate() {
-  return new Date().toISOString().split('T')[0];
-}
+function uid() { return `${Date.now().toString(36)}-${(++_uid).toString(36)}`; }
+function currentDate() { return new Date().toISOString().split('T')[0]; }
 
 function formatDate(dateStr) {
   if (!dateStr) return '';
@@ -85,9 +77,16 @@ function toast(msg, type = 'info') {
   _toastTimer = setTimeout(() => { el.className = 'toast'; }, 3200);
 }
 
+function chosenBookHtml(cb) {
+  if (!cb) return '<em>No book recorded</em>';
+  const name   = escHtml(getMember(cb.memberId)?.name ?? '?');
+  const title  = escHtml(cb.title);
+  const author = cb.author ? ` <span class="chosen-author">by ${escHtml(cb.author)}</span>` : '';
+  return `<strong>${name}</strong> — "${title}"${author}`;
+}
+
 // ── Weight Calculation ───────────────────────────────────
 function computeWeights() {
-  // Only members with a current book suggestion are eligible
   const eligible = state.members.filter(m => m.currentBook && m.currentBook.trim());
   if (eligible.length === 0) return [];
 
@@ -96,20 +95,16 @@ function computeWeights() {
   const segments = eligible.map((member, idx) => {
     const memberId = member.id;
 
-    // Attendance score: Σ ATTENDANCE_DECAY^sessions_ago for each past meeting attended.
-    // sessions_ago=1 for the most recent; missing sessions push older attendances further back.
     let attendanceScore = past.reduce((sum, m, i) => {
       if (!m.attendees.includes(memberId)) return sum;
       return sum + Math.pow(ATTENDANCE_DECAY, i + 1);
     }, 0);
     if (attendanceScore === 0) attendanceScore = FIRST_TIMER_BASE;
 
-    // Selection penalty: approaches 0 if chosen last session; approaches 1 over time.
     const lastPicked = past.find(m => m.chosenBook?.memberId === memberId);
     let selectionMult = 1.0;
     if (lastPicked) {
-      const sessionsAgo = past.indexOf(lastPicked) + 1;
-      selectionMult = 1 - Math.exp(-sessionsAgo / SELECTION_HALFLIFE);
+      selectionMult = 1 - Math.exp(-(past.indexOf(lastPicked) + 1) / SELECTION_HALFLIFE);
     }
 
     const weight = Math.max(attendanceScore * selectionMult, 0.001);
@@ -118,6 +113,7 @@ function computeWeights() {
       memberId,
       name:            member.name,
       book:            member.currentBook,
+      author:          member.currentAuthor || '',
       color:           COLORS[idx % COLORS.length],
       attendanceScore: Math.round(attendanceScore * 100) / 100,
       selectionMult:   Math.round(selectionMult * 100) / 100,
@@ -134,8 +130,7 @@ function computeWeights() {
 
 // ── Wheel Drawing ────────────────────────────────────────
 function drawWheel(ctx, segments, rotation) {
-  const W = ctx.canvas.width;
-  const H = ctx.canvas.height;
+  const W = ctx.canvas.width, H = ctx.canvas.height;
   const cx = W / 2, cy = H / 2;
   const R  = Math.min(cx, cy) - 12;
 
@@ -150,12 +145,11 @@ function drawWheel(ctx, segments, rotation) {
     ctx.font = '14px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('No book suggestions', cx, cy - 8);
-    ctx.fillText('(add in Books tab)', cx, cy + 12);
+    ctx.fillText('(add in Members tab)', cx, cy + 12);
     return;
   }
 
   let startAngle = rotation - Math.PI / 2;
-
   segments.forEach(seg => {
     const sweep    = seg.normalizedWeight * Math.PI * 2;
     const endAngle = startAngle + sweep;
@@ -175,28 +169,23 @@ function drawWheel(ctx, segments, rotation) {
       const tr = R * 0.64;
       const tx = cx + Math.cos(midAngle) * tr;
       const ty = cy + Math.sin(midAngle) * tr;
-
       ctx.save();
       ctx.translate(tx, ty);
       ctx.rotate(midAngle + Math.PI / 2);
       ctx.textAlign = 'center';
       ctx.fillStyle = '#fff';
-
-      const name = seg.name.length > 13 ? seg.name.slice(0, 12) + '…' : seg.name;
-      ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.shadowColor = 'rgba(0,0,0,0.4)';
       ctx.shadowBlur  = 2;
+      const name = seg.name.length > 13 ? seg.name.slice(0, 12) + '…' : seg.name;
+      ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.fillText(name, 0, 0);
-
       if (sweep > 0.32) {
         const book = seg.book.length > 16 ? seg.book.slice(0, 15) + '…' : seg.book;
         ctx.font = '10px system-ui, sans-serif';
         ctx.fillText(book, 0, 14);
       }
-
       ctx.restore();
     }
-
     startAngle = endAngle;
   });
 
@@ -215,18 +204,11 @@ function doSpin(segments, canvasEl, onDone) {
 
   const roll = Math.random();
   let cum = 0, winner = segments[segments.length - 1];
-  for (const seg of segments) {
-    cum += seg.normalizedWeight;
-    if (roll < cum) { winner = seg; break; }
-  }
+  for (const seg of segments) { cum += seg.normalizedWeight; if (roll < cum) { winner = seg; break; } }
 
   let cumAngle = 0;
-  for (const seg of segments) {
-    if (seg === winner) break;
-    cumAngle += seg.normalizedWeight * Math.PI * 2;
-  }
-  const winnerMid = cumAngle + (winner.normalizedWeight * Math.PI * 2) / 2;
-
+  for (const seg of segments) { if (seg === winner) break; cumAngle += seg.normalizedWeight * Math.PI * 2; }
+  const winnerMid   = cumAngle + (winner.normalizedWeight * Math.PI * 2) / 2;
   const extraSpins  = (7 + Math.floor(Math.random() * 5)) * Math.PI * 2;
   const targetAngle = extraSpins - winnerMid;
   const startAngle  = wheel.currentAngle;
@@ -235,7 +217,6 @@ function doSpin(segments, canvasEl, onDone) {
   const ctx         = canvasEl.getContext('2d');
 
   wheel.spinning = true;
-
   function frame(now) {
     if (!document.getElementById('wheel-canvas')) { wheel.spinning = false; return; }
     const t     = Math.min((now - startTime) / duration, 1);
@@ -250,7 +231,6 @@ function doSpin(segments, canvasEl, onDone) {
       onDone(winner);
     }
   }
-
   requestAnimationFrame(frame);
 }
 
@@ -264,8 +244,7 @@ function switchTab(name) {
 }
 
 function renderTab(name) {
-  ({ spin: renderSpin, books: renderBooks,
-     history: renderHistory, members: renderMembers })[name]?.();
+  ({ spin: renderSpin, history: renderHistory, members: renderMembers })[name]?.();
 }
 
 // ── Spin Tab ─────────────────────────────────────────────
@@ -278,10 +257,13 @@ function renderSpin() {
     const penalty = s.lastPicked
       ? `${Math.round(s.selectionMult * 100)}% (chosen ${formatDate(s.lastPicked)})`
       : '100% (never chosen)';
+    const bookCell = s.author
+      ? `${escHtml(s.book)}<br><span class="wt-author">by ${escHtml(s.author)}</span>`
+      : escHtml(s.book);
     return `
       <tr>
         <td class="wt-name"><span class="wt-swatch" style="background:${s.color}"></span>${escHtml(s.name)}</td>
-        <td class="wt-book" title="${escHtml(s.book)}">${escHtml(s.book)}</td>
+        <td class="wt-book" title="${escHtml(s.book)}">${bookCell}</td>
         <td>${s.attendanceScore}</td>
         <td>${penalty}</td>
         <td class="wt-pct">${pct}%</td>
@@ -293,7 +275,7 @@ function renderSpin() {
     <div class="spin-result-panel">
       <p class="winner-label">Next book…</p>
       <div class="winner-name">${escHtml(getMember(chosen.memberId)?.name ?? '?')}</div>
-      <div class="winner-book">"${escHtml(chosen.title)}"</div>
+      <div class="winner-book">"${escHtml(chosen.title)}"${chosen.author ? `<div class="winner-author">by ${escHtml(chosen.author)}</div>` : ''}</div>
       <p class="hint" style="margin-top:8px">Go to <strong>History</strong> to record this meeting once it happens.</p>
       <div class="winner-btns">
         <button class="btn" id="spin-again-btn">Spin Again</button>
@@ -346,7 +328,7 @@ function startSpin() {
   if (!canvas || wheel.spinning || wheel.segments.length === 0) return;
   document.getElementById('spin-btn').disabled = true;
   doSpin(wheel.segments, canvas, winner => {
-    state.nextMeeting.chosenBook = { memberId: winner.memberId, title: winner.book };
+    state.nextMeeting.chosenBook = { memberId: winner.memberId, title: winner.book, author: winner.author };
     save();
     renderSpin();
   });
@@ -375,9 +357,9 @@ function renderHistory() {
 }
 
 function renderNextMeetingCard() {
-  const chosen = state.nextMeeting.chosenBook;
+  const chosen    = state.nextMeeting.chosenBook;
   const chosenHtml = chosen
-    ? `<strong>${escHtml(getMember(chosen.memberId)?.name ?? '?')}</strong> — "${escHtml(chosen.title)}"`
+    ? `<strong>${escHtml(getMember(chosen.memberId)?.name ?? '?')}</strong> — "${escHtml(chosen.title)}"${chosen.author ? ` <span class="chosen-author">by ${escHtml(chosen.author)}</span>` : ''}`
     : '<em>Not yet spun</em>';
 
   if (!nextMeetingExpanded) {
@@ -391,7 +373,6 @@ function renderNextMeetingCard() {
       </div>`;
   }
 
-  // Expanded: form to record date + attendees
   const memberOptions = `<option value="">— none —</option>` +
     state.members.map(m => {
       const sel = chosen?.memberId === m.id ? 'selected' : '';
@@ -419,8 +400,16 @@ function renderNextMeetingCard() {
       <div class="edit-field-row">
         <label>Book chosen</label>
         <select id="next-winner" class="text-input">${memberOptions}</select>
+      </div>
+      <div class="edit-field-row">
+        <label>Title</label>
         <input type="text" id="next-book-title" class="text-input"
                value="${escHtml(chosen?.title ?? '')}" placeholder="Book title…" style="flex:1">
+      </div>
+      <div class="edit-field-row">
+        <label>Author</label>
+        <input type="text" id="next-book-author" class="text-input"
+               value="${escHtml(chosen?.author ?? '')}" placeholder="Author…" style="flex:1">
       </div>
       <div class="action-row">
         <button class="btn btn-success" data-action="next-save">Save to History</button>
@@ -434,17 +423,14 @@ function confirmNextMeeting() {
   if (!date) { toast('Please pick a date.', 'error'); return; }
   if (getMeeting(date)) { toast('A meeting already exists on this date.', 'error'); return; }
 
-  const attendees = Array.from(
-    document.querySelectorAll('[name="next-attendee"]:checked')
-  ).map(cb => cb.value);
+  const attendees = Array.from(document.querySelectorAll('[name="next-attendee"]:checked')).map(cb => cb.value);
   const winnerId  = document.getElementById('next-winner').value;
-  const bookTitle = document.getElementById('next-book-title').value.trim();
+  const title     = document.getElementById('next-book-title').value.trim();
+  const author    = document.getElementById('next-book-author').value.trim();
 
   state.meetings.push({
-    id:         uid(),
-    date,
-    attendees,
-    chosenBook: winnerId && bookTitle ? { memberId: winnerId, title: bookTitle } : null,
+    id: uid(), date, attendees,
+    chosenBook: winnerId && title ? { memberId: winnerId, title, author } : null,
   });
   state.nextMeeting.chosenBook = null;
   nextMeetingExpanded = false;
@@ -457,9 +443,6 @@ function renderMeetingCard(m) {
   if (m.id === editingMeetingId) return renderEditCard(m);
 
   const attendeeNames = m.attendees.map(id => getMember(id)?.name ?? '(removed)').join(', ') || 'Nobody';
-  const chosen = m.chosenBook
-    ? `<strong>${escHtml(getMember(m.chosenBook.memberId)?.name ?? '?')}</strong> — "${escHtml(m.chosenBook.title)}"`
-    : '<em>No book recorded</em>';
 
   return `
     <div class="hc" data-id="${m.id}">
@@ -470,7 +453,7 @@ function renderMeetingCard(m) {
           <button class="btn btn-sm btn-danger" data-action="delete" data-id="${m.id}">Delete</button>
         </div>
       </div>
-      <div class="hc-chosen">📖 ${chosen}</div>
+      <div class="hc-chosen">📖 ${chosenBookHtml(m.chosenBook)}</div>
       <div class="hc-attendees">Attended (${m.attendees.length}): ${escHtml(attendeeNames)}</div>
     </div>`;
 }
@@ -479,6 +462,7 @@ function renderEditCard(m) {
   const attendeeSet    = new Set(m.attendees);
   const chosenMemberId = m.chosenBook?.memberId ?? '';
   const chosenTitle    = m.chosenBook?.title    ?? '';
+  const chosenAuthor   = m.chosenBook?.author   ?? '';
 
   const checkboxes = state.members.length === 0
     ? '<p class="empty">No members added yet.</p>'
@@ -505,7 +489,14 @@ function renderEditCard(m) {
       <div class="edit-field-row">
         <label>Book chosen</label>
         <select id="edit-winner" class="text-input">${memberOptions}</select>
+      </div>
+      <div class="edit-field-row">
+        <label>Title</label>
         <input type="text" id="edit-book-title" class="text-input" value="${escHtml(chosenTitle)}" placeholder="Book title…" style="flex:1">
+      </div>
+      <div class="edit-field-row">
+        <label>Author</label>
+        <input type="text" id="edit-book-author" class="text-input" value="${escHtml(chosenAuthor)}" placeholder="Author…" style="flex:1">
       </div>
       <div class="action-row">
         <button class="btn btn-primary" data-action="save" data-id="${m.id}">Save</button>
@@ -523,17 +514,13 @@ function attachHistoryEvents() {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const { action, id } = el.dataset;
-
-    // Next Meeting card
     if (action === 'next-happened') { nextMeetingExpanded = true;  renderHistory(); }
     if (action === 'next-cancel')   { nextMeetingExpanded = false; renderHistory(); }
     if (action === 'next-save')     confirmNextMeeting();
-
-    // Past meeting cards
-    if (action === 'edit')   { editingMeetingId = id; renderHistory(); }
-    if (action === 'cancel') { editingMeetingId = null; renderHistory(); }
-    if (action === 'save')   saveMeetingEdit(id);
-    if (action === 'delete') deleteMeeting(id);
+    if (action === 'edit')          { editingMeetingId = id; renderHistory(); }
+    if (action === 'cancel')        { editingMeetingId = null; renderHistory(); }
+    if (action === 'save')          saveMeetingEdit(id);
+    if (action === 'delete')        deleteMeeting(id);
   });
 
   list.addEventListener('change', e => {
@@ -541,11 +528,12 @@ function attachHistoryEvents() {
       e.target.closest('.member-card')?.classList.toggle('checked', e.target.checked);
 
     if (e.target.id === 'next-winner' || e.target.id === 'edit-winner') {
-      const member = getMember(e.target.value);
-      const titleInput = document.getElementById(
-        e.target.id === 'next-winner' ? 'next-book-title' : 'edit-book-title'
-      );
-      if (titleInput && member?.currentBook) titleInput.value = member.currentBook;
+      const member    = getMember(e.target.value);
+      const isNext    = e.target.id === 'next-winner';
+      const titleEl   = document.getElementById(isNext ? 'next-book-title'  : 'edit-book-title');
+      const authorEl  = document.getElementById(isNext ? 'next-book-author' : 'edit-book-author');
+      if (titleEl  && member?.currentBook)   titleEl.value  = member.currentBook;
+      if (authorEl && member?.currentAuthor) authorEl.value = member.currentAuthor;
     }
   });
 }
@@ -565,10 +553,11 @@ function saveMeetingEdit(id) {
   const meeting = state.meetings.find(m => m.id === id);
   if (!meeting) return;
 
-  const newDate   = document.getElementById('edit-date').value;
+  const newDate  = document.getElementById('edit-date').value;
   const attendees = Array.from(document.querySelectorAll('[name="edit-attendee"]:checked')).map(cb => cb.value);
   const winnerId  = document.getElementById('edit-winner').value;
-  const bookTitle = document.getElementById('edit-book-title').value.trim();
+  const title     = document.getElementById('edit-book-title').value.trim();
+  const author    = document.getElementById('edit-book-author').value.trim();
 
   if (newDate && newDate !== meeting.date && getMeeting(newDate)) {
     toast('Another meeting already exists on that date.', 'error'); return;
@@ -576,7 +565,7 @@ function saveMeetingEdit(id) {
 
   if (newDate) meeting.date = newDate;
   meeting.attendees  = attendees;
-  meeting.chosenBook = winnerId && bookTitle ? { memberId: winnerId, title: bookTitle } : null;
+  meeting.chosenBook = winnerId && title ? { memberId: winnerId, title, author } : null;
 
   editingMeetingId = null;
   save();
@@ -593,98 +582,22 @@ function deleteMeeting(id) {
   renderHistory();
 }
 
-// ── Books Tab ─────────────────────────────────────────────
-function renderBooks() {
-  const cards = state.members.length === 0
-    ? '<p class="empty">No members yet.</p>'
-    : `<div class="books-grid">
-        ${state.members.map(m => {
-          const hasBook = !!m.currentBook;
-          return `
-            <div class="book-card" data-member-id="${m.id}">
-              <div class="bc-member">${escHtml(m.name)}</div>
-              <div class="bc-title ${hasBook ? '' : 'empty-book'}" data-field="title">
-                ${hasBook ? escHtml(m.currentBook) : '(no suggestion yet — excluded from draw)'}
-              </div>
-              ${m.bookUpdatedAt
-                ? `<div class="bc-meta">Last updated: ${formatDate(m.bookUpdatedAt)}</div>`
-                : '<div class="bc-meta">Not yet set</div>'
-              }
-              <button class="btn btn-sm" data-action="edit-book" data-member-id="${m.id}">Edit</button>
-            </div>`;
-        }).join('')}
-      </div>`;
-
-  document.getElementById('tab-books').innerHTML = `
-    <h2>Book Suggestions</h2>
-    <p class="hint">
-      Suggestions carry over each session — members only need to update when they change their pick.
-      Members without a suggestion are excluded from the spin.
-    </p>
-    ${cards}
-  `;
-
-  document.querySelectorAll('[data-action="edit-book"]').forEach(btn => {
-    btn.addEventListener('click', () => editBook(btn.dataset.memberId));
-  });
-}
-
-function editBook(memberId) {
-  const member  = getMember(memberId);
-  const titleEl = document.querySelector(`.book-card[data-member-id="${memberId}"] [data-field="title"]`);
-  if (!member || !titleEl || titleEl.querySelector('input')) return;
-
-  const prev = member.currentBook || '';
-  titleEl.innerHTML = '';
-
-  const input = document.createElement('input');
-  input.type  = 'text';
-  input.value = prev;
-  input.placeholder = 'Book title…';
-  input.className   = 'bc-input';
-  titleEl.appendChild(input);
-  input.focus();
-  input.select();
-
-  function commit() {
-    const val = input.value.trim();
-    if (val !== prev) {
-      member.currentBook   = val;
-      member.bookUpdatedAt = currentDate();
-      save();
-      if (val) toast(`Updated: "${val}"`, 'success');
-    }
-    renderBooks();
-  }
-
-  input.addEventListener('blur', commit);
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  { input.blur(); }
-    if (e.key === 'Escape') { renderBooks(); }
-  });
-}
-
-// ── Members Tab ───────────────────────────────────────────
+// ── Members Tab (includes book suggestions) ───────────────
 function renderMembers() {
-  const rows = state.members.length === 0
+  const sorted = [...state.members].sort((a, b) => a.name.localeCompare(b.name));
+
+  const rows = sorted.length === 0
     ? '<p class="empty">No members yet.</p>'
-    : state.members.map(m => {
-        const meetingsAttended = state.meetings.filter(mt => mt.attendees.includes(m.id)).length;
-        return `
-          <div class="member-row">
-            <span class="mr-name">${escHtml(m.name)}</span>
-            <span class="mr-meta">${meetingsAttended} meeting${meetingsAttended !== 1 ? 's' : ''} attended</span>
-            <button class="btn btn-sm btn-danger" data-action="remove" data-member-id="${m.id}">Remove</button>
-          </div>`;
-      }).join('');
+    : sorted.map(m => m.id === editingMemberId ? renderMemberEditRow(m) : renderMemberRow(m)).join('');
 
   document.getElementById('tab-members').innerHTML = `
     <h2>Members</h2>
+    <p class="hint">Book suggestions carry over each session — only update when changing pick. Members without a suggestion are excluded from the spin.</p>
     <div class="add-row">
       <input type="text" id="new-member-name" class="text-input" placeholder="Member name…" autocomplete="off">
       <button class="btn btn-primary" id="add-member-btn">Add Member</button>
     </div>
-    <div class="members-list">${rows}</div>
+    <div class="members-list" id="members-list">${rows}</div>
     <hr>
     <h3>Data Management</h3>
     <p class="hint">Export regularly to back up your data. Importing replaces all current data.</p>
@@ -700,15 +613,86 @@ function renderMembers() {
     if (e.key === 'Enter') addMember();
   });
 
-  document.querySelectorAll('[data-action="remove"]').forEach(btn => {
-    btn.addEventListener('click', () => removeMember(btn.dataset.memberId));
+  document.getElementById('members-list').addEventListener('click', e => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const { action, memberId } = el.dataset;
+    if (action === 'edit-member')   { editingMemberId = memberId; renderMembers(); }
+    if (action === 'cancel-member') { editingMemberId = null;     renderMembers(); }
+    if (action === 'save-member')   saveMemberBook(memberId);
+    if (action === 'remove')        removeMember(memberId);
   });
 
   document.getElementById('export-btn').addEventListener('click', exportData);
   document.getElementById('import-btn').addEventListener('click', () =>
     document.getElementById('import-file').click());
-  document.getElementById('import-file').addEventListener('change', e =>
-    importData(e.target));
+  document.getElementById('import-file').addEventListener('change', e => importData(e.target));
+}
+
+function renderMemberRow(m) {
+  const meetingsAttended = state.meetings.filter(mt => mt.attendees.includes(m.id)).length;
+  const hasBook = m.currentBook && m.currentBook.trim();
+
+  const bookHtml = hasBook
+    ? `<div class="mr-book-title">"${escHtml(m.currentBook)}"${m.currentAuthor ? ` <span class="mr-book-author">by ${escHtml(m.currentAuthor)}</span>` : ''}</div>
+       ${m.bookUpdatedAt ? `<div class="mr-book-meta">Updated ${formatDate(m.bookUpdatedAt)}</div>` : ''}`
+    : `<div class="mr-no-book">No suggestion — excluded from draw</div>`;
+
+  return `
+    <div class="member-row" data-member-id="${m.id}">
+      <div class="mr-main">
+        <div class="mr-name">${escHtml(m.name)}</div>
+        ${bookHtml}
+      </div>
+      <div class="mr-side">
+        <span class="mr-meetings">${meetingsAttended} meeting${meetingsAttended !== 1 ? 's' : ''}</span>
+        <div class="mr-btn-row">
+          <button class="btn btn-sm" data-action="edit-member" data-member-id="${m.id}">Edit</button>
+          <button class="btn btn-sm btn-danger" data-action="remove" data-member-id="${m.id}">Remove</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderMemberEditRow(m) {
+  return `
+    <div class="member-row mr-editing" data-member-id="${m.id}">
+      <div class="mr-edit-top">
+        <span class="mr-name">${escHtml(m.name)}</span>
+        <button class="btn btn-sm btn-danger" data-action="remove" data-member-id="${m.id}">Remove</button>
+      </div>
+      <div class="mr-edit-fields">
+        <div class="mr-edit-field">
+          <label>Book</label>
+          <input type="text" id="mr-book-input" class="text-input" value="${escHtml(m.currentBook || '')}" placeholder="Book title…">
+        </div>
+        <div class="mr-edit-field">
+          <label>Author</label>
+          <input type="text" id="mr-author-input" class="text-input" value="${escHtml(m.currentAuthor || '')}" placeholder="Author name…">
+        </div>
+      </div>
+      <div class="mr-edit-actions">
+        <button class="btn btn-primary btn-sm" data-action="save-member" data-member-id="${m.id}">Save</button>
+        <button class="btn btn-sm" data-action="cancel-member" data-member-id="${m.id}">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function saveMemberBook(id) {
+  const member = getMember(id);
+  if (!member) return;
+  const title  = document.getElementById('mr-book-input').value.trim();
+  const author = document.getElementById('mr-author-input').value.trim();
+  const changed = title !== (member.currentBook || '') || author !== (member.currentAuthor || '');
+  if (changed) {
+    member.currentBook   = title;
+    member.currentAuthor = author;
+    member.bookUpdatedAt = currentDate();
+    save();
+    toast('Updated.', 'success');
+  }
+  editingMemberId = null;
+  renderMembers();
 }
 
 function addMember() {
@@ -718,7 +702,7 @@ function addMember() {
   if (state.members.some(m => m.name.toLowerCase() === name.toLowerCase())) {
     toast('Member already exists.', 'error'); return;
   }
-  state.members.push({ id: uid(), name, currentBook: '', bookUpdatedAt: null });
+  state.members.push({ id: uid(), name, currentBook: '', currentAuthor: '', bookUpdatedAt: null });
   save();
   input.value = '';
   toast(`Added ${name}`, 'success');
@@ -730,6 +714,7 @@ function removeMember(id) {
   if (!member) return;
   if (!confirm(`Remove "${member.name}"? Their history in past meetings is kept.`)) return;
   state.members = state.members.filter(m => m.id !== id);
+  if (editingMemberId === id) editingMemberId = null;
   save();
   toast('Member removed.', 'success');
   renderMembers();
@@ -742,9 +727,7 @@ function exportData() {
     { type: 'application/json' }
   );
   const url = URL.createObjectURL(blob);
-  const a   = Object.assign(document.createElement('a'), {
-    href: url, download: `bookclub-${currentDate()}.json`
-  });
+  const a   = Object.assign(document.createElement('a'), { href: url, download: `bookclub-${currentDate()}.json` });
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -764,9 +747,7 @@ function importData(input) {
       save();
       toast('Data imported!', 'success');
       renderTab('members');
-    } catch (err) {
-      toast('Import failed: ' + err.message, 'error');
-    }
+    } catch (err) { toast('Import failed: ' + err.message, 'error'); }
   };
   reader.readAsText(file);
   input.value = '';
@@ -775,11 +756,9 @@ function importData(input) {
 // ── Init ─────────────────────────────────────────────────
 function init() {
   load();
-
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
   });
-
   renderHistory();
 }
 
