@@ -15,25 +15,26 @@ const COLORS = [
 
 // ── State ───────────────────────────────────────────────
 let state = {
-  members:  [],  // { id, name, currentBook, bookUpdatedAt }
-  meetings: [],  // { id, date, attendees:[id], chosenBook:{memberId,title} }
+  members:     [],  // { id, name, currentBook, bookUpdatedAt }
+  meetings:    [],  // { id, date, attendees:[id], chosenBook:{memberId,title} }
+  nextMeeting: { chosenBook: null },  // persisted pending spin result
 };
 
-// Spin result waiting to be confirmed — not persisted, re-spin if page reloads
-let pendingSpin = null; // { memberId, title }
-
-// Wheel animation state (not persisted)
+// UI state (not persisted)
 let wheel = {
   segments:     [],
   currentAngle: 0,
   spinning:     false,
 };
+let editingMeetingId    = null;
+let nextMeetingExpanded = false;  // whether "Meeting happened" form is open
 
 // ── Persistence ──────────────────────────────────────────
 function save() {
   localStorage.setItem('bookclub-v1', JSON.stringify({
-    members:  state.members,
-    meetings: state.meetings,
+    members:     state.members,
+    meetings:    state.meetings,
+    nextMeeting: state.nextMeeting,
   }));
 }
 
@@ -42,11 +43,10 @@ function load() {
     const raw = localStorage.getItem('bookclub-v1');
     if (!raw) return;
     const d = JSON.parse(raw);
-    state.members  = d.members  || [];
-    state.meetings = d.meetings || [];
-  } catch (e) {
-    console.error('Failed to load data:', e);
-  }
+    state.members     = d.members     || [];
+    state.meetings    = d.meetings    || [];
+    state.nextMeeting = d.nextMeeting || { chosenBook: null };
+  } catch (e) { console.error('Failed to load data:', e); }
 }
 
 // ── Utilities ────────────────────────────────────────────
@@ -56,9 +56,8 @@ function uid() {
 }
 
 function currentDate() {
-  return new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+  return new Date().toISOString().split('T')[0];
 }
-
 
 function formatDate(dateStr) {
   if (!dateStr) return '';
@@ -87,41 +86,25 @@ function toast(msg, type = 'info') {
 }
 
 // ── Weight Calculation ───────────────────────────────────
-/**
- * Returns an array of segment descriptors for everyone attending spinDate's meeting.
- *
- * Attendance score: Σ ATTENDANCE_DECAY^(months_ago) for each past meeting attended.
- *   First-timers with no prior history get FIRST_TIMER_BASE so they still participate.
- *
- * Selection multiplier: 1 − exp(−months_since_last_chosen / SELECTION_HALFLIFE)
- *   Approaches 0 if chosen last month; approaches 1 as time passes.
- *   1.0 if never chosen (no penalty).
- *
- * Final weight = attendance_score × selection_multiplier (min 0.001).
- */
 function computeWeights() {
-  if (state.members.length === 0) return [];
+  // Only members with a current book suggestion are eligible
+  const eligible = state.members.filter(m => m.currentBook && m.currentBook.trim());
+  if (eligible.length === 0) return [];
 
-  // All recorded meetings are past history, newest first
   const past = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date));
 
-  const segments = state.members.map((member, idx) => {
+  const segments = eligible.map((member, idx) => {
     const memberId = member.id;
 
-    // Attendance score: Σ ATTENDANCE_DECAY^sessions_ago for each past meeting attended,
-    // where sessions_ago = 1 for the most recent past meeting, 2 for the one before, etc.
-    // All past meetings count toward the rank, so missing a session pushes older
-    // attendances further back regardless of how much time passed.
-    let attendanceScore = past.reduce((sum, m, idx) => {
+    // Attendance score: Σ ATTENDANCE_DECAY^sessions_ago for each past meeting attended.
+    // sessions_ago=1 for the most recent; missing sessions push older attendances further back.
+    let attendanceScore = past.reduce((sum, m, i) => {
       if (!m.attendees.includes(memberId)) return sum;
-      const sessionsAgo = idx + 1;
-      return sum + Math.pow(ATTENDANCE_DECAY, sessionsAgo);
+      return sum + Math.pow(ATTENDANCE_DECAY, i + 1);
     }, 0);
-
     if (attendanceScore === 0) attendanceScore = FIRST_TIMER_BASE;
 
-    // Selection penalty: 1 − exp(−sessions_since_chosen / SELECTION_HALFLIFE)
-    // Approaches 0 if chosen last session; approaches 1 as sessions pass.
+    // Selection penalty: approaches 0 if chosen last session; approaches 1 over time.
     const lastPicked = past.find(m => m.chosenBook?.memberId === memberId);
     let selectionMult = 1.0;
     if (lastPicked) {
@@ -133,21 +116,19 @@ function computeWeights() {
 
     return {
       memberId,
-      name:           member.name,
-      book:           member.currentBook || '(no suggestion)',
-      bookUpdatedAt:  member.bookUpdatedAt,
-      color:          COLORS[idx % COLORS.length],
+      name:            member.name,
+      book:            member.currentBook,
+      color:           COLORS[idx % COLORS.length],
       attendanceScore: Math.round(attendanceScore * 100) / 100,
       selectionMult:   Math.round(selectionMult * 100) / 100,
       lastPicked:      lastPicked?.date ?? null,
       weight,
-      normalizedWeight: 0, // filled below
+      normalizedWeight: 0,
     };
-  }).filter(Boolean);
+  });
 
   const total = segments.reduce((s, r) => s + r.weight, 0);
   segments.forEach(r => { r.normalizedWeight = r.weight / total; });
-
   return segments;
 }
 
@@ -168,19 +149,18 @@ function drawWheel(ctx, segments, rotation) {
     ctx.fillStyle = '#7a6e5e';
     ctx.font = '14px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('No eligible members', cx, cy - 8);
-    ctx.fillText('(record attendance first)', cx, cy + 12);
+    ctx.fillText('No book suggestions', cx, cy - 8);
+    ctx.fillText('(add in Books tab)', cx, cy + 12);
     return;
   }
 
   let startAngle = rotation - Math.PI / 2;
 
   segments.forEach(seg => {
-    const sweep   = seg.normalizedWeight * Math.PI * 2;
+    const sweep    = seg.normalizedWeight * Math.PI * 2;
     const endAngle = startAngle + sweep;
     const midAngle = startAngle + sweep / 2;
 
-    // Segment
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, R, startAngle, endAngle);
@@ -191,7 +171,6 @@ function drawWheel(ctx, segments, rotation) {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Text (skip tiny segments)
     if (sweep > 0.12) {
       const tr = R * 0.64;
       const tx = cx + Math.cos(midAngle) * tr;
@@ -221,7 +200,6 @@ function drawWheel(ctx, segments, rotation) {
     startAngle = endAngle;
   });
 
-  // Centre hub
   ctx.beginPath();
   ctx.arc(cx, cy, 16, 0, Math.PI * 2);
   ctx.fillStyle = '#1a1207';
@@ -232,14 +210,9 @@ function drawWheel(ctx, segments, rotation) {
 }
 
 // ── Spin Animation ───────────────────────────────────────
-/**
- * Picks winner by weight, then animates the wheel decelerating to land with
- * the winner's midpoint aligned with the top pointer (12 o'clock).
- */
 function doSpin(segments, canvasEl, onDone) {
   if (wheel.spinning || segments.length === 0) return;
 
-  // Weighted random pick
   const roll = Math.random();
   let cum = 0, winner = segments[segments.length - 1];
   for (const seg of segments) {
@@ -247,7 +220,6 @@ function doSpin(segments, canvasEl, onDone) {
     if (roll < cum) { winner = seg; break; }
   }
 
-  // Cumulative angle to centre of winner's segment
   let cumAngle = 0;
   for (const seg of segments) {
     if (seg === winner) break;
@@ -255,34 +227,24 @@ function doSpin(segments, canvasEl, onDone) {
   }
   const winnerMid = cumAngle + (winner.normalizedWeight * Math.PI * 2) / 2;
 
-  // We draw segments starting from (rotation − π/2).
-  // Pointer is at absolute canvas angle −π/2 (top).
-  // We need: rotation − π/2 + winnerMid = −π/2  ⟹  rotation = −winnerMid
-  // Add full rotations for drama.
-  const extraSpins   = (7 + Math.floor(Math.random() * 5)) * Math.PI * 2;
-  const targetAngle  = extraSpins - winnerMid;
-
+  const extraSpins  = (7 + Math.floor(Math.random() * 5)) * Math.PI * 2;
+  const targetAngle = extraSpins - winnerMid;
   const startAngle  = wheel.currentAngle;
-  const duration    = 4500 + Math.random() * 1500;  // 4.5 – 6 s
+  const duration    = 4500 + Math.random() * 1500;
   const startTime   = performance.now();
   const ctx         = canvasEl.getContext('2d');
 
   wheel.spinning = true;
 
   function frame(now) {
-    // Guard: user may have navigated away
     if (!document.getElementById('wheel-canvas')) { wheel.spinning = false; return; }
-
-    const t      = Math.min((now - startTime) / duration, 1);
-    const eased  = 1 - Math.pow(1 - t, 4);  // ease-out quart
+    const t     = Math.min((now - startTime) / duration, 1);
+    const eased = 1 - Math.pow(1 - t, 4);
     wheel.currentAngle = startAngle + (targetAngle - startAngle) * eased;
-
     drawWheel(ctx, segments, wheel.currentAngle);
-
     if (t < 1) {
       requestAnimationFrame(frame);
     } else {
-      // Normalise to [0, 2π] so next spin starts cleanly
       wheel.currentAngle = ((targetAngle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
       wheel.spinning     = false;
       onDone(winner);
@@ -326,27 +288,14 @@ function renderSpin() {
       </tr>`;
   }).join('');
 
-  // Confirm panel: shown after spin, collects date + who actually attended
-  const confirmPanel = pendingSpin ? `
+  const chosen = state.nextMeeting.chosenBook;
+  const winnerPanel = chosen ? `
     <div class="spin-result-panel">
-      <p class="winner-label">This session's book…</p>
-      <div class="winner-name">${escHtml(getMember(pendingSpin.memberId)?.name ?? '?')}</div>
-      <div class="winner-book">"${escHtml(pendingSpin.title)}"</div>
-      <div class="confirm-row">
-        <label for="confirm-date">Date of meeting:</label>
-        <input type="date" id="confirm-date" value="${currentDate()}" class="text-input">
-      </div>
-      <div class="edit-section-label" style="margin-top:16px">Who attended?</div>
-      <div class="member-grid">
-        ${state.members.map(m => `
-          <label class="member-card checked">
-            <input type="checkbox" name="confirm-attendee" value="${m.id}" checked>
-            <span class="mc-name">${escHtml(m.name)}</span>
-            <span class="mc-book">${escHtml(m.currentBook || '')}</span>
-          </label>`).join('')}
-      </div>
-      <div class="winner-btns" style="margin-top:16px">
-        <button class="btn btn-success" id="confirm-btn">✓ Save to History</button>
+      <p class="winner-label">Next book…</p>
+      <div class="winner-name">${escHtml(getMember(chosen.memberId)?.name ?? '?')}</div>
+      <div class="winner-book">"${escHtml(chosen.title)}"</div>
+      <p class="hint" style="margin-top:8px">Go to <strong>History</strong> to record this meeting once it happens.</p>
+      <div class="winner-btns">
         <button class="btn" id="spin-again-btn">Spin Again</button>
       </div>
     </div>` : '';
@@ -364,7 +313,7 @@ function renderSpin() {
       <div class="weights-side">
         <h3>Weights</h3>
         ${segs.length === 0
-          ? '<p class="empty">Add members to start spinning.</p>'
+          ? '<p class="empty">Members need a book suggestion set to enter the draw.</p>'
           : `<table class="weight-table">
               <thead><tr>
                 <th>Member</th><th>Book</th><th>Attend. score</th><th>Recency penalty</th><th>Chance</th>
@@ -378,23 +327,16 @@ function renderSpin() {
         }
       </div>
     </div>
-    ${confirmPanel}
+    ${winnerPanel}
   `;
 
   const canvas = document.getElementById('wheel-canvas');
   if (canvas) drawWheel(canvas.getContext('2d'), segs, wheel.currentAngle);
 
   document.getElementById('spin-btn')?.addEventListener('click', startSpin);
-
-  // Confirm panel events
-  document.querySelectorAll('[name="confirm-attendee"]').forEach(cb => {
-    cb.addEventListener('change', e => {
-      cb.closest('.member-card').classList.toggle('checked', e.target.checked);
-    });
-  });
-  document.getElementById('confirm-btn')?.addEventListener('click', confirmResult);
   document.getElementById('spin-again-btn')?.addEventListener('click', () => {
-    pendingSpin = null;
+    state.nextMeeting.chosenBook = null;
+    save();
     startSpin();
   });
 }
@@ -402,103 +344,15 @@ function renderSpin() {
 function startSpin() {
   const canvas = document.getElementById('wheel-canvas');
   if (!canvas || wheel.spinning || wheel.segments.length === 0) return;
-  pendingSpin = null;
   document.getElementById('spin-btn').disabled = true;
   doSpin(wheel.segments, canvas, winner => {
-    pendingSpin = { memberId: winner.memberId, title: winner.book };
+    state.nextMeeting.chosenBook = { memberId: winner.memberId, title: winner.book };
+    save();
     renderSpin();
   });
 }
 
-function confirmResult() {
-  const date = document.getElementById('confirm-date').value;
-  if (!date) { toast('Please pick a date.', 'error'); return; }
-  if (getMeeting(date)) { toast('A meeting already exists on this date.', 'error'); return; }
-
-  const attendees = Array.from(
-    document.querySelectorAll('[name="confirm-attendee"]:checked')
-  ).map(cb => cb.value);
-
-  state.meetings.push({ id: uid(), date, attendees, chosenBook: { ...pendingSpin } });
-  pendingSpin = null;
-  save();
-  toast('Saved to history!', 'success');
-  renderSpin();
-}
-
-// ── Books Tab ─────────────────────────────────────────────
-function renderBooks() {
-  const cards = state.members.length === 0
-    ? '<p class="empty">No members yet.</p>'
-    : `<div class="books-grid">
-        ${state.members.map(m => {
-          const hasBook = !!m.currentBook;
-          return `
-            <div class="book-card" data-member-id="${m.id}">
-              <div class="bc-member">${escHtml(m.name)}</div>
-              <div class="bc-title ${hasBook ? '' : 'empty-book'}" data-field="title">
-                ${hasBook ? escHtml(m.currentBook) : '(no suggestion yet)'}
-              </div>
-              ${m.bookUpdatedAt
-                ? `<div class="bc-meta">Last updated: ${formatDate(m.bookUpdatedAt)}</div>`
-                : '<div class="bc-meta">Not yet set</div>'
-              }
-              <button class="btn btn-sm" data-action="edit-book" data-member-id="${m.id}">Edit</button>
-            </div>`;
-        }).join('')}
-      </div>`;
-
-  document.getElementById('tab-books').innerHTML = `
-    <h2>Book Suggestions</h2>
-    <p class="hint">
-      Suggestions carry over each session - members only need to update when they change their pick.
-    </p>
-    ${cards}
-  `;
-
-  document.querySelectorAll('[data-action="edit-book"]').forEach(btn => {
-    btn.addEventListener('click', () => editBook(btn.dataset.memberId));
-  });
-}
-
-function editBook(memberId) {
-  const member  = getMember(memberId);
-  const titleEl = document.querySelector(`.book-card[data-member-id="${memberId}"] [data-field="title"]`);
-  if (!member || !titleEl || titleEl.querySelector('input')) return;
-
-  const prev = member.currentBook || '';
-  titleEl.innerHTML = '';
-
-  const input = document.createElement('input');
-  input.type  = 'text';
-  input.value = prev;
-  input.placeholder = 'Book title…';
-  input.className   = 'bc-input';
-  titleEl.appendChild(input);
-  input.focus();
-  input.select();
-
-  function commit() {
-    const val = input.value.trim();
-    if (val !== prev) {
-      member.currentBook    = val;
-      member.bookUpdatedAt  = currentDate();
-      save();
-      if (val) toast(`Updated: "${val}"`, 'success');
-    }
-    renderBooks();
-  }
-
-  input.addEventListener('blur', commit);
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  { input.blur(); }
-    if (e.key === 'Escape') { renderBooks(); }
-  });
-}
-
 // ── History Tab ───────────────────────────────────────────
-let editingMeetingId = null;
-
 function renderHistory() {
   const sorted = [...state.meetings].sort((a, b) => b.date.localeCompare(a.date));
 
@@ -506,11 +360,12 @@ function renderHistory() {
     <h2>History</h2>
     <div class="add-meeting-bar">
       <input type="date" id="new-meeting-date" value="${currentDate()}" class="text-input">
-      <button class="btn btn-primary" id="add-meeting-btn">Add Meeting</button>
+      <button class="btn btn-primary" id="add-meeting-btn">Add Past Meeting</button>
     </div>
     <div class="history-list" id="history-list">
+      ${renderNextMeetingCard()}
       ${sorted.length === 0
-        ? '<p class="empty">No meetings yet.</p>'
+        ? '<p class="empty" style="margin-top:16px">No past meetings yet.</p>'
         : sorted.map(renderMeetingCard).join('')}
     </div>
   `;
@@ -519,13 +374,92 @@ function renderHistory() {
   attachHistoryEvents();
 }
 
+function renderNextMeetingCard() {
+  const chosen = state.nextMeeting.chosenBook;
+  const chosenHtml = chosen
+    ? `<strong>${escHtml(getMember(chosen.memberId)?.name ?? '?')}</strong> — "${escHtml(chosen.title)}"`
+    : '<em>Not yet spun</em>';
+
+  if (!nextMeetingExpanded) {
+    return `
+      <div class="hc hc-next">
+        <div class="hc-top">
+          <div class="hc-date">Next Meeting</div>
+          <button class="btn btn-sm btn-primary" data-action="next-happened">Meeting happened ✓</button>
+        </div>
+        <div class="hc-chosen">📖 ${chosenHtml}</div>
+      </div>`;
+  }
+
+  // Expanded: form to record date + attendees
+  const memberOptions = `<option value="">— none —</option>` +
+    state.members.map(m => {
+      const sel = chosen?.memberId === m.id ? 'selected' : '';
+      return `<option value="${m.id}" ${sel}>${escHtml(m.name)}</option>`;
+    }).join('');
+
+  const checkboxes = state.members.length === 0
+    ? '<p class="empty">No members added yet.</p>'
+    : state.members.map(m => `
+        <label class="member-card checked">
+          <input type="checkbox" name="next-attendee" value="${m.id}" checked>
+          <span class="mc-name">${escHtml(m.name)}</span>
+          <span class="mc-book">${escHtml(m.currentBook || '')}</span>
+        </label>`).join('');
+
+  return `
+    <div class="hc hc-next hc-editing">
+      <div class="hc-next-label">Next Meeting → Record</div>
+      <div class="edit-field-row">
+        <label>Date</label>
+        <input type="date" id="next-meeting-date" value="${currentDate()}" class="text-input">
+      </div>
+      <div class="edit-section-label">Who attended</div>
+      <div class="member-grid">${checkboxes}</div>
+      <div class="edit-field-row">
+        <label>Book chosen</label>
+        <select id="next-winner" class="text-input">${memberOptions}</select>
+        <input type="text" id="next-book-title" class="text-input"
+               value="${escHtml(chosen?.title ?? '')}" placeholder="Book title…" style="flex:1">
+      </div>
+      <div class="action-row">
+        <button class="btn btn-success" data-action="next-save">Save to History</button>
+        <button class="btn" data-action="next-cancel">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function confirmNextMeeting() {
+  const date = document.getElementById('next-meeting-date').value;
+  if (!date) { toast('Please pick a date.', 'error'); return; }
+  if (getMeeting(date)) { toast('A meeting already exists on this date.', 'error'); return; }
+
+  const attendees = Array.from(
+    document.querySelectorAll('[name="next-attendee"]:checked')
+  ).map(cb => cb.value);
+  const winnerId  = document.getElementById('next-winner').value;
+  const bookTitle = document.getElementById('next-book-title').value.trim();
+
+  state.meetings.push({
+    id:         uid(),
+    date,
+    attendees,
+    chosenBook: winnerId && bookTitle ? { memberId: winnerId, title: bookTitle } : null,
+  });
+  state.nextMeeting.chosenBook = null;
+  nextMeetingExpanded = false;
+  save();
+  toast('Meeting saved to history!', 'success');
+  renderHistory();
+}
+
 function renderMeetingCard(m) {
   if (m.id === editingMeetingId) return renderEditCard(m);
 
   const attendeeNames = m.attendees.map(id => getMember(id)?.name ?? '(removed)').join(', ') || 'Nobody';
   const chosen = m.chosenBook
-    ? `<strong>${escHtml(getMember(m.chosenBook.memberId)?.name ?? '?')}</strong> - "${escHtml(m.chosenBook.title)}"`
-    : '<em>Not yet spun</em>';
+    ? `<strong>${escHtml(getMember(m.chosenBook.memberId)?.name ?? '?')}</strong> — "${escHtml(m.chosenBook.title)}"`
+    : '<em>No book recorded</em>';
 
   return `
     <div class="hc" data-id="${m.id}">
@@ -555,7 +489,7 @@ function renderEditCard(m) {
           <span class="mc-book">${escHtml(mem.currentBook || '')}</span>
         </label>`).join('');
 
-  const memberOptions = `<option value="">- none -</option>` +
+  const memberOptions = `<option value="">— none —</option>` +
     state.members.map(mem =>
       `<option value="${mem.id}" ${mem.id === chosenMemberId ? 'selected' : ''}>${escHtml(mem.name)}</option>`
     ).join('');
@@ -589,6 +523,13 @@ function attachHistoryEvents() {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const { action, id } = el.dataset;
+
+    // Next Meeting card
+    if (action === 'next-happened') { nextMeetingExpanded = true;  renderHistory(); }
+    if (action === 'next-cancel')   { nextMeetingExpanded = false; renderHistory(); }
+    if (action === 'next-save')     confirmNextMeeting();
+
+    // Past meeting cards
     if (action === 'edit')   { editingMeetingId = id; renderHistory(); }
     if (action === 'cancel') { editingMeetingId = null; renderHistory(); }
     if (action === 'save')   saveMeetingEdit(id);
@@ -596,12 +537,14 @@ function attachHistoryEvents() {
   });
 
   list.addEventListener('change', e => {
-    if (e.target.name === 'edit-attendee')
+    if (e.target.name === 'next-attendee' || e.target.name === 'edit-attendee')
       e.target.closest('.member-card')?.classList.toggle('checked', e.target.checked);
 
-    if (e.target.id === 'edit-winner') {
+    if (e.target.id === 'next-winner' || e.target.id === 'edit-winner') {
       const member = getMember(e.target.value);
-      const titleInput = document.getElementById('edit-book-title');
+      const titleInput = document.getElementById(
+        e.target.id === 'next-winner' ? 'next-book-title' : 'edit-book-title'
+      );
       if (titleInput && member?.currentBook) titleInput.value = member.currentBook;
     }
   });
@@ -648,6 +591,77 @@ function deleteMeeting(id) {
   save();
   toast('Meeting deleted.', 'success');
   renderHistory();
+}
+
+// ── Books Tab ─────────────────────────────────────────────
+function renderBooks() {
+  const cards = state.members.length === 0
+    ? '<p class="empty">No members yet.</p>'
+    : `<div class="books-grid">
+        ${state.members.map(m => {
+          const hasBook = !!m.currentBook;
+          return `
+            <div class="book-card" data-member-id="${m.id}">
+              <div class="bc-member">${escHtml(m.name)}</div>
+              <div class="bc-title ${hasBook ? '' : 'empty-book'}" data-field="title">
+                ${hasBook ? escHtml(m.currentBook) : '(no suggestion yet — excluded from draw)'}
+              </div>
+              ${m.bookUpdatedAt
+                ? `<div class="bc-meta">Last updated: ${formatDate(m.bookUpdatedAt)}</div>`
+                : '<div class="bc-meta">Not yet set</div>'
+              }
+              <button class="btn btn-sm" data-action="edit-book" data-member-id="${m.id}">Edit</button>
+            </div>`;
+        }).join('')}
+      </div>`;
+
+  document.getElementById('tab-books').innerHTML = `
+    <h2>Book Suggestions</h2>
+    <p class="hint">
+      Suggestions carry over each session — members only need to update when they change their pick.
+      Members without a suggestion are excluded from the spin.
+    </p>
+    ${cards}
+  `;
+
+  document.querySelectorAll('[data-action="edit-book"]').forEach(btn => {
+    btn.addEventListener('click', () => editBook(btn.dataset.memberId));
+  });
+}
+
+function editBook(memberId) {
+  const member  = getMember(memberId);
+  const titleEl = document.querySelector(`.book-card[data-member-id="${memberId}"] [data-field="title"]`);
+  if (!member || !titleEl || titleEl.querySelector('input')) return;
+
+  const prev = member.currentBook || '';
+  titleEl.innerHTML = '';
+
+  const input = document.createElement('input');
+  input.type  = 'text';
+  input.value = prev;
+  input.placeholder = 'Book title…';
+  input.className   = 'bc-input';
+  titleEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  function commit() {
+    const val = input.value.trim();
+    if (val !== prev) {
+      member.currentBook   = val;
+      member.bookUpdatedAt = currentDate();
+      save();
+      if (val) toast(`Updated: "${val}"`, 'success');
+    }
+    renderBooks();
+  }
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { input.blur(); }
+    if (e.key === 'Escape') { renderBooks(); }
+  });
 }
 
 // ── Members Tab ───────────────────────────────────────────
@@ -724,7 +738,7 @@ function removeMember(id) {
 // ── Data Import / Export ──────────────────────────────────
 function exportData() {
   const blob = new Blob(
-    [JSON.stringify({ members: state.members, meetings: state.meetings }, null, 2)],
+    [JSON.stringify({ members: state.members, meetings: state.meetings, nextMeeting: state.nextMeeting }, null, 2)],
     { type: 'application/json' }
   );
   const url = URL.createObjectURL(blob);
@@ -744,8 +758,9 @@ function importData(input) {
       const d = JSON.parse(e.target.result);
       if (!Array.isArray(d.members) || !Array.isArray(d.meetings))
         throw new Error('Unexpected format');
-      state.members  = d.members;
-      state.meetings = d.meetings;
+      state.members     = d.members;
+      state.meetings    = d.meetings;
+      state.nextMeeting = d.nextMeeting || { chosenBook: null };
       save();
       toast('Data imported!', 'success');
       renderTab('members');

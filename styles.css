@@ -422,6 +422,24 @@ input[type="month"]:focus,
   background: var(--primary-light);
 }
 
+.hc-next {
+  border-color: var(--accent);
+  border-style: dashed;
+  border-width: 2px;
+  background: #f2f8f4;
+}
+
+.hc-next .hc-date { color: var(--accent); }
+
+.hc-next-label {
+  font-size: 0.8rem;
+  color: var(--accent);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 14px;
+}
+
 .hc-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .hc-date { font-weight: 700; color: var(--primary); font-size: 1rem; }
 .hc-btns { display: flex; gap: 6px; flex-shrink: 0; }
