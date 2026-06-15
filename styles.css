@@ -402,21 +402,33 @@ input[type="month"]:focus,
 .bc-input { width: 100%; font-size: 0.9rem; font-style: italic; padding: 5px 8px; }
 
 /* ── History tab ── */
+.add-meeting-bar { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+
 .history-list { display: flex; flex-direction: column; gap: 10px; }
 
 .hc {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 18px;
+  padding: 14px 16px;
   box-shadow: var(--shadow);
 }
 
-.hc.current { border-color: var(--primary); border-width: 2px; }
+.hc-editing {
+  border-color: var(--primary);
+  border-width: 2px;
+  background: var(--primary-light);
+}
 
-.hc-date { font-weight: 700; color: var(--primary); margin-bottom: 5px; font-size: 1rem; }
-.hc-chosen { margin-bottom: 4px; font-size: 0.9rem; }
+.hc-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.hc-date { font-weight: 700; color: var(--primary); font-size: 1rem; }
+.hc-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.hc-chosen { margin-bottom: 3px; font-size: 0.9rem; }
 .hc-attendees { font-size: 0.8rem; color: var(--muted); }
+
+.edit-field-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.edit-field-row label { font-size: 0.85rem; color: var(--muted); min-width: 80px; font-weight: 500; }
+.edit-section-label { font-size: 0.8rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px; margin-top: 4px; }
 
 /* ── Members tab ── */
 .members-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
