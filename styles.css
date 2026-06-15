@@ -451,35 +451,49 @@ input[type="month"]:focus,
 .edit-section-label { font-size: 0.8rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px; margin-top: 4px; }
 
 /* ── Members tab ── */
-.members-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.members-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
 
 .member-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
-.mr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.mr-name { font-weight: 600; font-size: 0.95rem; }
-.mr-book-title { font-size: 0.87rem; font-style: italic; }
-.mr-book-author { font-style: normal; color: var(--muted); font-size: 0.82rem; }
+/* Top strip: name + meetings count + remove button */
+.mr-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.mr-name { font-weight: 600; font-size: 0.95rem; flex: 1; }
+.mr-meetings { font-size: 0.76rem; color: var(--muted); white-space: nowrap; }
+
+/* Book suggestion section */
+.mr-book-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  justify-content: space-between;
+}
+
+.mr-book-display { flex: 1; min-width: 0; }
+.mr-book-title { font-style: italic; font-size: 0.92rem; margin-bottom: 2px; }
+.mr-book-author { color: var(--muted); font-size: 0.83rem; margin-bottom: 2px; }
 .mr-book-meta { font-size: 0.74rem; color: var(--muted); }
-.mr-no-book { font-size: 0.83rem; color: var(--muted); font-style: italic; }
+.mr-no-book { flex: 1; font-size: 0.83rem; color: var(--muted); font-style: italic; }
 
-.mr-side { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; flex-shrink: 0; }
-.mr-meetings { font-size: 0.74rem; color: var(--muted); white-space: nowrap; }
-.mr-btn-row { display: flex; gap: 6px; }
-
-.mr-editing { flex-direction: column; gap: 0; }
-.mr-edit-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.mr-edit-fields { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+/* Editing state */
+.mr-book-editing { flex-direction: column; align-items: stretch; gap: 10px; }
+.mr-edit-fields { display: flex; flex-direction: column; gap: 8px; }
 .mr-edit-field { display: flex; align-items: center; gap: 8px; }
-.mr-edit-field label { font-size: 0.82rem; color: var(--muted); min-width: 50px; font-weight: 500; }
+.mr-edit-field label { font-size: 0.83rem; color: var(--muted); min-width: 50px; font-weight: 500; }
 .mr-edit-field .text-input { flex: 1; }
 .mr-edit-actions { display: flex; gap: 8px; }
 

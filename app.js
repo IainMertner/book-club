@@ -633,47 +633,52 @@ function renderMemberRow(m) {
   const meetingsAttended = state.meetings.filter(mt => mt.attendees.includes(m.id)).length;
   const hasBook = m.currentBook && m.currentBook.trim();
 
-  const bookHtml = hasBook
-    ? `<div class="mr-book-title">"${escHtml(m.currentBook)}"${m.currentAuthor ? ` <span class="mr-book-author">by ${escHtml(m.currentAuthor)}</span>` : ''}</div>
-       ${m.bookUpdatedAt ? `<div class="mr-book-meta">Updated ${formatDate(m.bookUpdatedAt)}</div>` : ''}`
-    : `<div class="mr-no-book">No suggestion — excluded from draw</div>`;
+  const bookSection = hasBook
+    ? `<div class="mr-book-display">
+         <div class="mr-book-title">"${escHtml(m.currentBook)}"</div>
+         ${m.currentAuthor ? `<div class="mr-book-author">by ${escHtml(m.currentAuthor)}</div>` : ''}
+         ${m.bookUpdatedAt ? `<div class="mr-book-meta">Updated ${formatDate(m.bookUpdatedAt)}</div>` : ''}
+       </div>
+       <button class="btn btn-sm" data-action="edit-member" data-member-id="${m.id}">Edit suggestion</button>`
+    : `<div class="mr-no-book">No suggestion yet — excluded from spin</div>
+       <button class="btn btn-sm btn-primary" data-action="edit-member" data-member-id="${m.id}">+ Add suggestion</button>`;
 
   return `
-    <div class="member-row" data-member-id="${m.id}">
-      <div class="mr-main">
-        <div class="mr-name">${escHtml(m.name)}</div>
-        ${bookHtml}
-      </div>
-      <div class="mr-side">
+    <div class="member-row">
+      <div class="mr-header">
+        <span class="mr-name">${escHtml(m.name)}</span>
         <span class="mr-meetings">${meetingsAttended} meeting${meetingsAttended !== 1 ? 's' : ''}</span>
-        <div class="mr-btn-row">
-          <button class="btn btn-sm" data-action="edit-member" data-member-id="${m.id}">Edit</button>
-          <button class="btn btn-sm btn-danger" data-action="remove" data-member-id="${m.id}">Remove</button>
-        </div>
+        <button class="btn btn-sm btn-danger" data-action="remove" data-member-id="${m.id}">Remove</button>
+      </div>
+      <div class="mr-book-section">
+        ${bookSection}
       </div>
     </div>`;
 }
 
 function renderMemberEditRow(m) {
   return `
-    <div class="member-row mr-editing" data-member-id="${m.id}">
-      <div class="mr-edit-top">
+    <div class="member-row mr-editing">
+      <div class="mr-header">
         <span class="mr-name">${escHtml(m.name)}</span>
+        <span class="mr-meetings">${state.meetings.filter(mt => mt.attendees.includes(m.id)).length} meetings</span>
         <button class="btn btn-sm btn-danger" data-action="remove" data-member-id="${m.id}">Remove</button>
       </div>
-      <div class="mr-edit-fields">
-        <div class="mr-edit-field">
-          <label>Book</label>
-          <input type="text" id="mr-book-input" class="text-input" value="${escHtml(m.currentBook || '')}" placeholder="Book title…">
+      <div class="mr-book-section mr-book-editing">
+        <div class="mr-edit-fields">
+          <div class="mr-edit-field">
+            <label>Book</label>
+            <input type="text" id="mr-book-input" class="text-input" value="${escHtml(m.currentBook || '')}" placeholder="Book title…">
+          </div>
+          <div class="mr-edit-field">
+            <label>Author</label>
+            <input type="text" id="mr-author-input" class="text-input" value="${escHtml(m.currentAuthor || '')}" placeholder="Author name…">
+          </div>
         </div>
-        <div class="mr-edit-field">
-          <label>Author</label>
-          <input type="text" id="mr-author-input" class="text-input" value="${escHtml(m.currentAuthor || '')}" placeholder="Author name…">
+        <div class="mr-edit-actions">
+          <button class="btn btn-sm btn-primary" data-action="save-member" data-member-id="${m.id}">Save</button>
+          <button class="btn btn-sm" data-action="cancel-member" data-member-id="${m.id}">Cancel</button>
         </div>
-      </div>
-      <div class="mr-edit-actions">
-        <button class="btn btn-primary btn-sm" data-action="save-member" data-member-id="${m.id}">Save</button>
-        <button class="btn btn-sm" data-action="cancel-member" data-member-id="${m.id}">Cancel</button>
       </div>
     </div>`;
 }
