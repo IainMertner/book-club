@@ -3,8 +3,8 @@
 // ──────────────────────────────────────────────────────────
 
 // ── Config ──────────────────────────────────────────────
-const ATTENDANCE_DECAY   = 0.80;  // weight multiplier per month of distance
-const SELECTION_HALFLIFE = 4;     // months before selection penalty halves
+const ATTENDANCE_DECAY   = 0.80;  // weight multiplier per session of distance
+const SELECTION_HALFLIFE = 4;     // sessions before selection penalty halves
 const FIRST_TIMER_BASE   = 0.30;  // base score for members with no prior meetings
 
 const COLORS = [
@@ -53,22 +53,16 @@ function uid() {
   return `${Date.now().toString(36)}-${(++_uid).toString(36)}`;
 }
 
-function currentYM() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+function currentDate() {
+  return new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
 }
 
-/** Signed month difference: positive if toYM is later than fromYM */
-function monthsDiff(fromYM, toYM) {
-  const [fy, fm] = fromYM.split('-').map(Number);
-  const [ty, tm] = toYM.split('-').map(Number);
-  return (ty - fy) * 12 + (tm - fm);
-}
 
-function formatYM(ym) {
-  if (!ym) return '';
-  const [y, m] = ym.split('-');
-  return new Date(y, m - 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'long', year: 'numeric',
+  });
 }
 
 function getMember(id) { return state.members.find(m => m.id === id); }
@@ -116,28 +110,25 @@ function computeWeights(spinDate) {
     const member = getMember(memberId);
     if (!member) return null;
 
-    // Attendance score: Σ ATTENDANCE_DECAY^months_ago for each past meeting attended.
-    // This naturally captures both recency and frequency:
-    //   - Recent months contribute more than old ones (0.8^1=0.80 vs 0.8^12≈0.07)
-    //   - More attendances add up, so frequent attenders score higher than occasional ones
-    //   - Two sessions a couple of months ago outweigh one session last month
-    //     (e.g. 0.64+0.51=1.15 vs 0.80), satisfying the intuition that
-    //     consistency matters more than a single recent appearance
-    let attendanceScore = past.reduce((sum, m) => {
+    // Attendance score: Σ ATTENDANCE_DECAY^sessions_ago for each past meeting attended,
+    // where sessions_ago = 1 for the most recent past meeting, 2 for the one before, etc.
+    // All past meetings count toward the rank, so missing a session pushes older
+    // attendances further back regardless of how much time passed.
+    let attendanceScore = past.reduce((sum, m, idx) => {
       if (!m.attendees.includes(memberId)) return sum;
-      const ago = monthsDiff(m.date, spinDate);
-      return sum + Math.pow(ATTENDANCE_DECAY, ago);
+      const sessionsAgo = idx + 1;
+      return sum + Math.pow(ATTENDANCE_DECAY, sessionsAgo);
     }, 0);
 
     if (attendanceScore === 0) attendanceScore = FIRST_TIMER_BASE;
 
-    // Selection penalty: 1 − exp(−months_since_chosen / SELECTION_HALFLIFE)
-    // Approaches 0 if chosen last month; approaches 1 as time passes.
+    // Selection penalty: 1 − exp(−sessions_since_chosen / SELECTION_HALFLIFE)
+    // Approaches 0 if chosen last session; approaches 1 as sessions pass.
     const lastPicked = past.find(m => m.chosenBook?.memberId === memberId);
     let selectionMult = 1.0;
     if (lastPicked) {
-      const ago = monthsDiff(lastPicked.date, spinDate);
-      selectionMult = 1 - Math.exp(-ago / SELECTION_HALFLIFE);
+      const sessionsAgo = past.indexOf(lastPicked) + 1;
+      selectionMult = 1 - Math.exp(-sessionsAgo / SELECTION_HALFLIFE);
     }
 
     const weight = Math.max(attendanceScore * selectionMult, 0.001);
@@ -340,13 +331,14 @@ function renderMeeting() {
   document.getElementById('tab-meeting').innerHTML = `
     <h2>Meeting Setup</h2>
     <div class="field-row">
-      <label for="meeting-month">Month:</label>
-      <input type="month" id="meeting-month" value="${date}">
+      <label for="meeting-date-input">Date:</label>
+      <input type="date" id="meeting-date-input" value="${date}">
       <button class="btn btn-primary btn-sm" id="set-date-btn">Set</button>
     </div>
     <p class="hint">
-      Tick everyone who's attending <strong>${formatYM(date)}</strong>.
-      Only ticked members will appear on the spin wheel.
+      Tick everyone who attended on <strong>${formatDate(date)}</strong>.
+      Pick any past date to enter attendance retroactively.
+      Only ticked members appear on the spin wheel.
     </p>
     ${rows}
     <div class="action-row">
@@ -358,7 +350,7 @@ function renderMeeting() {
 
   // Events
   document.getElementById('set-date-btn').addEventListener('click', () => {
-    const val = document.getElementById('meeting-month').value;
+    const val = document.getElementById('meeting-date-input').value;
     if (val) { state.currentMeetingDate = val; renderMeeting(); }
   });
 
@@ -414,7 +406,7 @@ function renderSpin() {
   const weightRows = segs.map(s => {
     const pct     = Math.round(s.normalizedWeight * 100);
     const penalty = s.lastPicked
-      ? `${Math.round(s.selectionMult * 100)}% (chosen ${formatYM(s.lastPicked)})`
+      ? `${Math.round(s.selectionMult * 100)}% (chosen ${formatDate(s.lastPicked)})`
       : '100% (never chosen)';
     return `
       <tr>
@@ -427,8 +419,8 @@ function renderSpin() {
   }).join('');
 
   document.getElementById('tab-spin').innerHTML = `
-    <h2>Spin — ${formatYM(date)}</h2>
-    ${warned ? `<div class="no-meeting-warning">⚠ No attendance saved for ${formatYM(date)}. Go to the Meeting tab first.</div>` : ''}
+    <h2>Spin — ${formatDate(date)}</h2>
+    ${warned ? `<div class="no-meeting-warning">⚠ No attendance saved for ${formatDate(date)}. Go to the Meeting tab first.</div>` : ''}
     ${resultBanner}
     <div class="spin-layout">
       <div class="wheel-side">
@@ -451,12 +443,12 @@ function renderSpin() {
               <tbody>${weightRows}</tbody>
             </table>
             <p class="hint" style="margin-top:10px">
-              <strong>Attend. score</strong> = Σ 0.8<sup>months ago</sup> for each past meeting attended.
-              Recent months count more than old ones, and more attendances add up — so
-              someone who came last month scores 0.80, someone who came 2 and 3 months ago scores
-              0.64 + 0.51 = 1.15 (higher), and someone who attended regularly last year but not recently scores very low.<br><br>
+              <strong>Attend. score</strong> = Σ 0.8<sup>sessions ago</sup> for each past meeting attended
+              (1 = last session, 2 = one before, etc.). More recent sessions count more, and
+              attending more sessions adds up — e.g. coming to the last session scores 0.80,
+              but coming to the two before that scores 0.64 + 0.51 = 1.15.<br><br>
               <strong>Recency penalty</strong> = if this person's book was chosen recently their weight is
-              multiplied by 1 − e<sup>−months/4</sup> (≈22% after 1 month, ≈63% after 4 months, ≈95% after 12 months).
+              multiplied by 1 − e<sup>−sessions/4</sup> (≈22% after 1 session, ≈63% after 4, ≈95% after 12).
             </p>`
         }
       </div>
@@ -539,7 +531,7 @@ function renderBooks() {
                 ${hasBook ? escHtml(m.currentBook) : '(no suggestion yet)'}
               </div>
               ${m.bookUpdatedAt
-                ? `<div class="bc-meta">Last updated: ${formatYM(m.bookUpdatedAt)}</div>`
+                ? `<div class="bc-meta">Last updated: ${formatDate(m.bookUpdatedAt)}</div>`
                 : '<div class="bc-meta">Not yet set</div>'
               }
               <button class="btn btn-sm" data-action="edit-book" data-member-id="${m.id}">Edit</button>
@@ -551,7 +543,7 @@ function renderBooks() {
     <h2>Book Suggestions</h2>
     <p class="hint">
       Suggestions carry over each month — members only need to update when they change their pick.
-      Updates are stamped to <strong>${formatYM(date)}</strong>.
+      Updates are stamped to <strong>${formatDate(date)}</strong>.
     </p>
     ${cards}
   `;
@@ -612,7 +604,7 @@ function renderHistory() {
           .join(', ') || 'Nobody';
         return `
           <div class="hc ${m.date === date ? 'current' : ''}">
-            <div class="hc-date">${formatYM(m.date)}${m.date === date ? ' <span style="font-weight:400;font-size:0.8rem">(current)</span>' : ''}</div>
+            <div class="hc-date">${formatDate(m.date)}${m.date === date ? ' <span style="font-weight:400;font-size:0.8rem">(current)</span>' : ''}</div>
             <div class="hc-chosen">📖 ${chosen}</div>
             <div class="hc-attendees">Attended: ${escHtml(attendees)}</div>
           </div>`;
@@ -703,7 +695,7 @@ function exportData() {
   );
   const url = URL.createObjectURL(blob);
   const a   = Object.assign(document.createElement('a'), {
-    href: url, download: `bookclub-${currentYM()}.json`
+    href: url, download: `bookclub-${currentDate()}.json`
   });
   a.click();
   URL.revokeObjectURL(url);
@@ -734,7 +726,7 @@ function importData(input) {
 // ── Init ─────────────────────────────────────────────────
 function init() {
   load();
-  state.currentMeetingDate = currentYM();
+  state.currentMeetingDate = currentDate();
 
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
