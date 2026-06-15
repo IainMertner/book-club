@@ -2,16 +2,16 @@
 
 :root {
   --bg: #faf8f5;
-  --surface: #ffffff;
+  --surface: #f2c0bf;
   --border: #e2d9ce;
-  --primary: #8b3a3a;
-  --primary-dark: #6b2828;
+  --primary: #c14756;
+  --primary-dark: #a63744;
   --primary-light: #f9eeee;
-  --accent: #4a7c59;
+  --accent: #5f6c40;
   --text: #2a1f14;
   --muted: #7a6e5e;
-  --success: #2e7d32;
-  --error: #c62828;
+  --success: #aac05c;
+  --error: #c14756;
   --radius: 8px;
   --shadow: 0 2px 8px rgba(0,0,0,0.08);
   --shadow-lg: 0 4px 20px rgba(0,0,0,0.14);
@@ -249,22 +249,13 @@ input[type="month"]:focus,
 }
 
 /* ── Spin tab ── */
-.spin-layout {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 28px;
-  align-items: start;
-}
-
-@media (max-width: 680px) {
-  .spin-layout { grid-template-columns: 1fr; }
-  .wheel-side { align-items: center; }
-}
-
-.wheel-side {
+.spin-center {
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  align-items: center;
+  gap: 14px;
+  max-width: 400px;
+  margin: 0 auto;
 }
 
 .wheel-container {

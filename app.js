@@ -24,6 +24,7 @@ let wheel = { segments: [], currentAngle: 0, spinning: false };
 let editingMeetingId    = null;
 let editingMemberId     = null;
 let nextMeetingExpanded = false;
+let wheelShowWeights    = false;
 
 // ── Persistence ──────────────────────────────────────────
 function save() {
@@ -214,16 +215,22 @@ function drawWheel(ctx, segments, rotation) {
 }
 
 // ── Spin Animation ───────────────────────────────────────
-function doSpin(segments, canvasEl, onDone) {
+// segments = real weighted segments (used for the pick)
+// displaySegments = what gets drawn (may have equal sizes if weights are hidden)
+function doSpin(segments, displaySegments, canvasEl, onDone) {
   if (wheel.spinning || segments.length === 0) return;
 
+  // Weighted random pick using real weights
   const roll = Math.random();
   let cum = 0, winner = segments[segments.length - 1];
   for (const seg of segments) { cum += seg.normalizedWeight; if (roll < cum) { winner = seg; break; } }
 
+  // Animate to land the winner's segment at the pointer.
+  // Use displaySegments for angle calculation so the visual lines up with what's drawn.
+  const displayWinner = displaySegments.find(s => s.memberId === winner.memberId);
   let cumAngle = 0;
-  for (const seg of segments) { if (seg === winner) break; cumAngle += seg.normalizedWeight * Math.PI * 2; }
-  const winnerMid   = cumAngle + (winner.normalizedWeight * Math.PI * 2) / 2;
+  for (const seg of displaySegments) { if (seg === displayWinner) break; cumAngle += seg.normalizedWeight * Math.PI * 2; }
+  const winnerMid   = cumAngle + (displayWinner.normalizedWeight * Math.PI * 2) / 2;
   const extraSpins  = (7 + Math.floor(Math.random() * 5)) * Math.PI * 2;
   const targetAngle = extraSpins - winnerMid;
   const startAngle  = wheel.currentAngle;
@@ -237,7 +244,7 @@ function doSpin(segments, canvasEl, onDone) {
     const t     = Math.min((now - startTime) / duration, 1);
     const eased = 1 - Math.pow(1 - t, 4);
     wheel.currentAngle = startAngle + (targetAngle - startAngle) * eased;
-    drawWheel(ctx, segments, wheel.currentAngle);
+    drawWheel(ctx, displaySegments, wheel.currentAngle);
     if (t < 1) {
       requestAnimationFrame(frame);
     } else {
@@ -263,33 +270,16 @@ function renderTab(name) {
 }
 
 // ── Spin Tab ─────────────────────────────────────────────
-function renderSpin() {
-  const segs     = computeWeights();                       // all eligible (incl. 0-weight)
-  const spinSegs = segs.filter(s => s.weight > 0);        // subset that can actually win
-  wheel.segments = spinSegs;
+function getDisplaySegs(spinSegs) {
+  if (wheelShowWeights) return spinSegs;
+  const n = spinSegs.length;
+  return spinSegs.map(s => ({ ...s, normalizedWeight: n > 0 ? 1 / n : 0 }));
+}
 
-  const weightRows = segs.map(s => {
-    const pct = Math.round(s.normalizedWeight * 100);
-    let penaltyCell;
-    if (!s.lastPicked) {
-      penaltyCell = '100% (never chosen)';
-    } else if (s.selectionMult === 0) {
-      penaltyCell = '<span class="wt-zero">0% - chosen last session</span>';
-    } else {
-      penaltyCell = `${Math.round(s.selectionMult * 100)}% (chosen ${formatDate(s.lastPicked)})`;
-    }
-    const bookCell = s.author
-      ? `${escHtml(s.book)}<br><span class="wt-author">by ${escHtml(s.author)}</span>`
-      : escHtml(s.book);
-    return `
-      <tr class="${s.weight === 0 ? 'wt-row-excluded' : ''}">
-        <td class="wt-name"><span class="wt-swatch" style="background:${s.color}"></span>${escHtml(s.name)}</td>
-        <td class="wt-book" title="${escHtml(s.book)}">${bookCell}</td>
-        <td>${s.attendanceScore}</td>
-        <td>${penaltyCell}</td>
-        <td class="wt-pct">${pct}%</td>
-      </tr>`;
-  }).join('');
+function renderSpin() {
+  const segs     = computeWeights();
+  const spinSegs = segs.filter(s => s.weight > 0);
+  wheel.segments = spinSegs;
 
   const chosen = state.nextMeeting.chosenBook;
   const winnerPanel = chosen ? `
@@ -305,38 +295,26 @@ function renderSpin() {
 
   document.getElementById('tab-spin').innerHTML = `
     <h2>Spin</h2>
-    <div class="spin-layout">
-      <div class="wheel-side">
-        <div class="wheel-container">
-          <div class="wheel-pointer">▼</div>
-          <canvas id="wheel-canvas" width="360" height="360"></canvas>
-        </div>
-        <button class="btn-spin" id="spin-btn" ${spinSegs.length === 0 ? 'disabled' : ''}>SPIN!</button>
+    <div class="spin-center">
+      <div class="wheel-container">
+        <div class="wheel-pointer">▼</div>
+        <canvas id="wheel-canvas" width="360" height="360"></canvas>
       </div>
-      <div class="weights-side">
-        <h3>Weights</h3>
-        ${segs.length === 0
-          ? '<p class="empty">Members need a book suggestion and at least one past attendance to enter the draw.</p>'
-          : `<table class="weight-table">
-              <thead><tr>
-                <th>Member</th><th>Book</th><th>Attend. score</th><th>Recency penalty</th><th>Chance</th>
-              </tr></thead>
-              <tbody>${weightRows}</tbody>
-            </table>
-            <p class="hint" style="margin-top:10px">
-              <strong>Attend. score</strong> = Σ 0.8<sup>sessions ago</sup> per past meeting attended.<br>
-              <strong>Recency penalty</strong> = 1 − e<sup>−sessions/4</sup> if their book was recently chosen.
-            </p>`
-        }
-      </div>
+      <button class="btn-spin" id="spin-btn" ${spinSegs.length === 0 ? 'disabled' : ''}>SPIN!</button>
+      <button class="btn btn-sm" id="weights-toggle-btn">${wheelShowWeights ? 'Hide weights' : 'Show weights'}</button>
+      ${spinSegs.length === 0 ? '<p class="empty" style="margin-top:12px">Members need a book suggestion and at least one past attendance to enter the draw.</p>' : ''}
     </div>
     ${winnerPanel}
   `;
 
   const canvas = document.getElementById('wheel-canvas');
-  if (canvas) drawWheel(canvas.getContext('2d'), spinSegs, wheel.currentAngle);
+  if (canvas) drawWheel(canvas.getContext('2d'), getDisplaySegs(spinSegs), wheel.currentAngle);
 
   document.getElementById('spin-btn')?.addEventListener('click', startSpin);
+  document.getElementById('weights-toggle-btn')?.addEventListener('click', () => {
+    wheelShowWeights = !wheelShowWeights;
+    renderSpin();
+  });
   document.getElementById('spin-again-btn')?.addEventListener('click', () => {
     state.nextMeeting.chosenBook = null;
     save();
@@ -348,7 +326,8 @@ function startSpin() {
   const canvas = document.getElementById('wheel-canvas');
   if (!canvas || wheel.spinning || wheel.segments.length === 0) return;
   document.getElementById('spin-btn').disabled = true;
-  doSpin(wheel.segments, canvas, winner => {
+  const displaySegs = getDisplaySegs(wheel.segments);
+  doSpin(wheel.segments, displaySegs, canvas, winner => {
     state.nextMeeting.chosenBook = { memberId: winner.memberId, title: winner.book, author: winner.author };
     save();
     renderSpin();
@@ -388,7 +367,7 @@ function renderNextMeetingCard() {
       <div class="hc hc-next">
         <div class="hc-top">
           <div class="hc-date">Next Meeting</div>
-          <button class="btn btn-sm btn-primary" data-action="next-happened">Meeting happened</button>
+          <button class="btn btn-sm btn-primary" data-action="next-happened">Meeting happened ✓</button>
         </div>
         <div class="hc-chosen">📖 ${chosenHtml}</div>
       </div>`;
