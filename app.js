@@ -111,7 +111,7 @@ function computeWeights() {
       if (!m.attendees.includes(memberId)) return sum;
       return sum + Math.pow(ATTENDANCE_DECAY, i + 1);
     }, 0);
-    if (attendanceScore < 0.3) attendanceScore = 0.3;  // base score for non-attendees
+    if (attendanceScore < 0.2) attendanceScore = 0.2;  // base score for non-attendees
 
     // Selection multiplier: hard 0 if chosen last session; shifted exponential recovery after that.
     // Formula: 1 − exp(−(lastPickedIdx) / HALFLIFE), where lastPickedIdx is 0-based index in past[].
