@@ -13,6 +13,13 @@ const COLORS = [
   '#DAA8AD', '#C88193', '#B55A78', '#874D6D'
 ];
 
+// Shuffled once on page load; reused every render so colors don't change mid-session
+const SHUFFLED_COLORS = [...COLORS];
+for (let i = SHUFFLED_COLORS.length - 1; i > 0; i--) {
+  const j = Math.floor(Math.random() * (i + 1));
+  [SHUFFLED_COLORS[i], SHUFFLED_COLORS[j]] = [SHUFFLED_COLORS[j], SHUFFLED_COLORS[i]];
+}
+
 
 // ── State ───────────────────────────────────────────────
 let state = {
@@ -97,12 +104,6 @@ function computeWeights() {
   );
   if (eligible.length === 0) return [];
 
-  const shuffledColors = [...COLORS];
-  for (let i = shuffledColors.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffledColors[i], shuffledColors[j]] = [shuffledColors[j], shuffledColors[i]];
-  }
-
   const segments = eligible.map((member, idx) => {
     const memberId = member.id;
 
@@ -135,7 +136,7 @@ function computeWeights() {
       name:            member.name,
       book:            member.currentBook,
       author:          member.currentAuthor || '',
-      color:           shuffledColors[idx % shuffledColors.length],
+      color:           SHUFFLED_COLORS[idx % SHUFFLED_COLORS.length],
       attendanceScore: Math.round(attendanceScore * 100) / 100,
       selectionMult:   Math.round(selectionMult * 100) / 100,
       lastPicked:      lastPickedIdx >= 0 ? past[lastPickedIdx].date : null,
@@ -150,6 +151,59 @@ function computeWeights() {
   if (total > 0) spinnable.forEach(r => { r.normalizedWeight = r.weight / total; });
 
   return segments;  // includes 0-weight members so the table can show why they're excluded
+}
+
+// ── Audio ─────────────────────────────────────────────────
+let _audioCtx = null;
+function getAudioCtx() {
+  if (!_audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) _audioCtx = new Ctx();
+  }
+  return _audioCtx;
+}
+
+function playTick(speed) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  const length = Math.floor(ctx.sampleRate * 0.03);
+  const buf  = ctx.createBuffer(1, length, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < length; i++)
+    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 4);
+  const src    = ctx.createBufferSource();
+  src.buffer   = buf;
+  const filter = ctx.createBiquadFilter();
+  filter.type  = 'bandpass';
+  filter.frequency.value = 700 + speed * 800;
+  filter.Q.value = 0.8;
+  const gain = ctx.createGain();
+  gain.gain.value = 0.12 + speed * 0.22;
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(ctx.destination);
+  src.start();
+}
+
+function playWin() {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  [523, 659, 784, 1047].forEach((freq, i) => {
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const t = ctx.currentTime + i * 0.13;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.25, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+    osc.start(t);
+    osc.stop(t + 0.4);
+  });
 }
 
 // ── Wheel Drawing ────────────────────────────────────────
@@ -246,6 +300,9 @@ function doSpin(segments, displaySegments, canvasEl, onDone) {
   const startTime   = performance.now();
   const ctx         = canvasEl.getContext('2d');
 
+  const tickInterval = (Math.PI * 2) / Math.max(displaySegments.length, 8);
+  let tickAccum = 0, prevEased = 0;
+
   wheel.spinning = true;
   function frame(now) {
     if (!document.getElementById('wheel-canvas')) { wheel.spinning = false; return; }
@@ -253,11 +310,22 @@ function doSpin(segments, displaySegments, canvasEl, onDone) {
     const eased = 1 - Math.pow(1 - t, 4);
     wheel.currentAngle = startAngle + (targetAngle - startAngle) * eased;
     drawWheel(ctx, displaySegments, wheel.currentAngle);
+
+    const angleDelta = Math.abs((eased - prevEased) * (targetAngle - startAngle));
+    const speed      = Math.min(1, (eased - prevEased) * 80);
+    tickAccum += angleDelta;
+    while (tickAccum >= tickInterval) {
+      playTick(speed);
+      tickAccum -= tickInterval;
+    }
+    prevEased = eased;
+
     if (t < 1) {
       requestAnimationFrame(frame);
     } else {
       wheel.currentAngle = ((targetAngle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
       wheel.spinning     = false;
+      playWin();
       onDone(winner);
     }
   }
@@ -603,18 +671,18 @@ function renderMembers() {
 
   document.getElementById('tab-members').innerHTML = `
     <h2>Members</h2>
-    <p class="hint">Book suggestions carry over each session - only update when changing pick. Members without a suggestion are excluded from the spin.</p>
+    <p class="hint">Book suggestions carry over each session.</p>
     <div class="add-row">
       <input type="text" id="new-member-name" class="text-input" placeholder="Member name…" autocomplete="off">
       <button class="btn btn-primary" id="add-member-btn">Add Member</button>
     </div>
     <div class="members-list" id="members-list">${rows}</div>
     <hr>
-    <h3>Data Management</h3>
-    <p class="hint">Export regularly to back up your data. Importing replaces all current data.</p>
+    <h3>Data</h3>
+    <p class="hint">Export to download current member/meeting data. Import to overwrite all current data.</p>
     <div class="data-row">
-      <button class="btn" id="export-btn">Export JSON</button>
-      <button class="btn" id="import-btn">Import JSON</button>
+      <button class="btn" id="export-btn">Export data</button>
+      <button class="btn" id="import-btn">Import data</button>
     </div>
     <input type="file" id="import-file" accept=".json" style="display:none">
   `;
@@ -651,7 +719,7 @@ function renderMemberRow(m) {
          ${m.bookUpdatedAt ? `<div class="mr-book-meta">Updated ${formatDate(m.bookUpdatedAt)}</div>` : ''}
        </div>
        <button class="btn btn-sm" data-action="edit-member" data-member-id="${m.id}">Edit suggestion</button>`
-    : `<div class="mr-no-book">No suggestion yet - excluded from spin</div>
+    : `<div class="mr-no-book">No book suggestion</div>
        <button class="btn btn-sm btn-primary" data-action="edit-member" data-member-id="${m.id}">+ Add suggestion</button>`;
 
   return `
