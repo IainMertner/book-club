@@ -187,23 +187,7 @@ function playTick(speed) {
 }
 
 function playWin() {
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-  if (ctx.state === 'suspended') ctx.resume();
-  [523, 659, 784, 1047].forEach((freq, i) => {
-    const osc  = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = freq;
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    const t = ctx.currentTime + i * 0.13;
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(0.25, t + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
-    osc.start(t);
-    osc.stop(t + 0.4);
-  });
+  new Audio('jesuschristisgod-children-saying-yay-praise-and-worship-jesus-299607.mp3').play();
 }
 
 // ── Wheel Drawing ────────────────────────────────────────
