@@ -187,7 +187,9 @@ function playTick(speed) {
 }
 
 function playWin() {
-  new Audio('jesuschristisgod-children-saying-yay-praise-and-worship-jesus-299607.mp3').play();
+  const audio = new Audio('jesuschristisgod-children-saying-yay-praise-and-worship-jesus-299607.mp3');
+  audio.volume = 0.5;
+  audio.play();
 }
 
 // ── Wheel Drawing ────────────────────────────────────────
