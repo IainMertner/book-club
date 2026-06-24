@@ -417,6 +417,32 @@ input[type="month"]:focus,
 
 .book-card:hover { box-shadow: var(--shadow-lg); }
 
+/* ── Config Tab ── */
+.config-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 12px;
+}
+.config-section h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 10px; }
+.config-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.config-lock-form { display: flex; flex-direction: column; gap: 10px; max-width: 320px; }
+.config-error { color: var(--error); font-size: 0.88rem; min-height: 1.2em; }
+.admin-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 7px;
+  vertical-align: middle;
+  margin-left: 8px;
+}
+
 .bc-member { font-weight: 700; font-size: 0.95rem; color: var(--primary); }
 .bc-title { font-style: italic; color: var(--text); font-size: 0.9rem; flex: 1; min-height: 36px; word-break: break-word; }
 .bc-title.empty-book { color: var(--muted); font-style: italic; }

@@ -59,6 +59,23 @@ function saveMeta() {
     .catch(e => console.error('saveMeta failed:', e));
 }
 
+// ── Admin mode ────────────────────────────────────────────
+let adminMode        = false;
+let clubPasswordHash = null;  // SHA-256 hash from Firestore
+
+function loadAdminMode() {
+  adminMode = localStorage.getItem(`bookclub-admin-${currentClubId}`) === 'true';
+}
+function setAdminMode(val) {
+  adminMode = val;
+  if (val) localStorage.setItem(`bookclub-admin-${currentClubId}`, 'true');
+  else localStorage.removeItem(`bookclub-admin-${currentClubId}`);
+}
+async function hashPassword(pwd) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pwd));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // ── State ───────────────────────────────────────────────
 let state = {
   members:     [],  // { id, name, currentBook, currentAuthor, bookUpdatedAt }
@@ -78,7 +95,7 @@ function save() {
   setDoc(doc(db, 'clubs', currentClubId), {
     name: currentClub, members: state.members,
     meetings: state.meetings, nextMeeting: state.nextMeeting,
-  }).catch(e => console.error('Save failed:', e));
+  }, { merge: true }).catch(e => console.error('Save failed:', e));
 }
 
 function subscribeToClub() {
@@ -90,6 +107,7 @@ function subscribeToClub() {
       state.members     = d.members     || [];
       state.meetings    = d.meetings    || [];
       state.nextMeeting = d.nextMeeting || { chosenBook: null };
+      clubPasswordHash  = d.adminPassword || null;
       if (!resolved) { resolved = true; resolve(); return; }
       if (!snap.metadata.hasPendingWrites)
         renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
@@ -368,16 +386,12 @@ function renderClubSelector() {
     <select id="club-select" class="club-select">
       ${clubList.map(c => `<option value="${escHtml(c.id)}"${c.id === currentClubId ? ' selected' : ''}>${escHtml(c.name)}</option>`).join('')}
       <option value="__new__">+ New club…</option>
-    </select>
-    <button id="club-rename-btn" class="club-rename-btn" title="Rename club">✎</button>
-    <button id="club-delete-btn" class="club-rename-btn" title="Delete club" ${clubList.length === 1 ? 'disabled' : ''}>🗑</button>`;
+    </select>`;
   document.getElementById('club-select').addEventListener('change', e => {
     const val = e.target.value;
     if (val === '__new__') createClub();
     else switchClub(val);
   });
-  document.getElementById('club-rename-btn').addEventListener('click', renameClub);
-  document.getElementById('club-delete-btn').addEventListener('click', deleteClub);
 }
 
 async function switchClub(id) {
@@ -387,6 +401,7 @@ async function switchClub(id) {
   localStorage.setItem('bookclub-active', currentClubId);
   editingMeetingId = null; editingMemberId = null; nextMeetingExpanded = false;
   await subscribeToClub();
+  loadAdminMode();
   renderClubSelector();
   renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
 }
@@ -436,6 +451,116 @@ async function deleteClub() {
   toast('Club deleted.', 'success');
 }
 
+// ── Config Tab ───────────────────────────────────────────
+function renderConfig() {
+  const panel = document.getElementById('tab-config');
+  if (!panel) return;
+
+  if (adminMode) {
+    panel.innerHTML = `
+      <h2>Club Config <span class="admin-badge">Admin</span></h2>
+      <div class="config-section">
+        <h3>This club</h3>
+        <div class="config-row">
+          <strong>${escHtml(currentClub)}</strong>
+          <button class="btn btn-sm" id="cfg-rename-btn">Rename</button>
+          <button class="btn btn-sm btn-danger" id="cfg-delete-btn" ${clubList.length === 1 ? 'disabled' : ''}>Delete club</button>
+        </div>
+      </div>
+      <div class="config-section">
+        <h3>Password</h3>
+        <button class="btn btn-sm" id="cfg-change-pwd-btn">Change password</button>
+      </div>
+      <div class="config-section">
+        <h3>Data</h3>
+        <div class="data-row">
+          <button class="btn" id="export-btn">Export data</button>
+          <button class="btn" id="import-btn">Import data</button>
+        </div>
+        <input type="file" id="import-file" accept=".json" style="display:none">
+      </div>
+      <hr style="margin:24px 0">
+      <button class="btn" id="cfg-exit-btn">Exit admin mode</button>`;
+
+    document.getElementById('cfg-rename-btn').addEventListener('click', renameClub);
+    document.getElementById('cfg-delete-btn').addEventListener('click', deleteClub);
+    document.getElementById('cfg-change-pwd-btn').addEventListener('click', changeAdminPassword);
+    document.getElementById('export-btn').addEventListener('click', exportData);
+    document.getElementById('import-btn').addEventListener('click', () => document.getElementById('import-file').click());
+    document.getElementById('import-file').addEventListener('change', e => importData(e.target));
+    document.getElementById('cfg-exit-btn').addEventListener('click', () => {
+      setAdminMode(false);
+      renderConfig();
+      const active = document.querySelector('.tab.active')?.dataset.tab;
+      if (active && active !== 'config') renderTab(active);
+    });
+
+  } else if (!clubPasswordHash) {
+    panel.innerHTML = `
+      <h2>Club Config</h2>
+      <p class="hint">No admin password has been set for this club yet. Set one to enable admin mode.</p>
+      <div class="config-lock-form">
+        <input type="password" id="cfg-pwd1" class="text-input" placeholder="New password…">
+        <input type="password" id="cfg-pwd2" class="text-input" placeholder="Confirm password…">
+        <button class="btn btn-primary" id="cfg-set-btn">Set password &amp; unlock</button>
+        <p class="config-error" id="cfg-error"></p>
+      </div>`;
+    document.getElementById('cfg-set-btn').addEventListener('click', setAdminPassword);
+
+  } else {
+    panel.innerHTML = `
+      <h2>Club Config</h2>
+      <p class="hint">Enter the admin password to access settings.</p>
+      <div class="config-lock-form">
+        <input type="password" id="cfg-pwd" class="text-input" placeholder="Password…">
+        <button class="btn btn-primary" id="cfg-unlock-btn">Unlock</button>
+        <p class="config-error" id="cfg-error"></p>
+      </div>`;
+    const unlock = () => unlockAdmin();
+    document.getElementById('cfg-unlock-btn').addEventListener('click', unlock);
+    document.getElementById('cfg-pwd').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+  }
+}
+
+async function unlockAdmin() {
+  const pwd = document.getElementById('cfg-pwd')?.value;
+  if (!pwd) return;
+  const hash = await hashPassword(pwd);
+  if (hash === clubPasswordHash) {
+    setAdminMode(true);
+    renderConfig();
+    const active = document.querySelector('.tab.active')?.dataset.tab;
+    if (active && active !== 'config') renderTab(active);
+  } else {
+    const err = document.getElementById('cfg-error');
+    if (err) err.textContent = 'Incorrect password.';
+  }
+}
+
+async function setAdminPassword() {
+  const pwd1 = document.getElementById('cfg-pwd1')?.value;
+  const pwd2 = document.getElementById('cfg-pwd2')?.value;
+  const err  = document.getElementById('cfg-error');
+  if (!pwd1) { if (err) err.textContent = 'Please enter a password.'; return; }
+  if (pwd1 !== pwd2) { if (err) err.textContent = 'Passwords do not match.'; return; }
+  const hash = await hashPassword(pwd1);
+  clubPasswordHash = hash;
+  await updateDoc(doc(db, 'clubs', currentClubId), { adminPassword: hash });
+  setAdminMode(true);
+  renderConfig();
+}
+
+async function changeAdminPassword() {
+  const pwd1 = prompt('New password:')?.trim();
+  if (!pwd1) return;
+  const pwd2 = prompt('Confirm new password:')?.trim();
+  if (pwd1 !== pwd2) { toast('Passwords do not match.', 'error'); return; }
+  const hash = await hashPassword(pwd1);
+  clubPasswordHash = hash;
+  await updateDoc(doc(db, 'clubs', currentClubId), { adminPassword: hash });
+  toast('Password changed.', 'success');
+}
+
 // ── Tab System ───────────────────────────────────────────
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t =>
@@ -446,7 +571,7 @@ function switchTab(name) {
 }
 
 function renderTab(name) {
-  ({ spin: renderSpin, history: renderHistory, members: renderMembers })[name]?.();
+  ({ spin: renderSpin, history: renderHistory, members: renderMembers, config: renderConfig })[name]?.();
 }
 
 // ── Spin Tab ─────────────────────────────────────────────
@@ -473,21 +598,28 @@ function renderSpin() {
       </div>
     </div>` : '';
 
+  // Non-admins always see equal segments (no weights revealed)
+  const displayForRender = adminMode ? getDisplaySegs(spinSegs) : spinSegs.map(s => ({
+    ...s, normalizedWeight: spinSegs.length > 0 ? 1 / spinSegs.length : 0,
+  }));
+
   document.getElementById('tab-spin').innerHTML = `
     <div class="spin-center">
       <div class="wheel-container">
         <div class="wheel-pointer">▼</div>
         <canvas id="wheel-canvas" width="360" height="360"></canvas>
       </div>
-      <button class="btn-spin" id="spin-btn" ${spinSegs.length === 0 ? 'disabled' : ''}>SPIN!</button>
-      <button class="btn btn-sm" id="weights-toggle-btn">${wheelShowWeights ? 'Hide weights' : 'Show weights'}</button>
-      ${spinSegs.length === 0 ? '<p class="empty" style="margin-top:12px">Members need a book suggestion and at least one past attendance to enter the draw.</p>' : ''}
+      ${adminMode ? `
+        <button class="btn-spin" id="spin-btn" ${spinSegs.length === 0 ? 'disabled' : ''}>SPIN!</button>
+        <button class="btn btn-sm" id="weights-toggle-btn">${wheelShowWeights ? 'Hide weights' : 'Show weights'}</button>
+        ${spinSegs.length === 0 ? '<p class="empty" style="margin-top:12px">Members need a book suggestion to enter the draw.</p>' : ''}
+      ` : '<p class="hint" style="margin-top:12px">Only an admin can spin the wheel.</p>'}
     </div>
     ${winnerPanel}
   `;
 
   const canvas = document.getElementById('wheel-canvas');
-  if (canvas) drawWheel(canvas.getContext('2d'), getDisplaySegs(spinSegs), wheel.currentAngle);
+  if (canvas) drawWheel(canvas.getContext('2d'), displayForRender, wheel.currentAngle);
 
   document.getElementById('spin-btn')?.addEventListener('click', startSpin);
   document.getElementById('weights-toggle-btn')?.addEventListener('click', () => {
@@ -495,6 +627,7 @@ function renderSpin() {
     renderSpin();
   });
   document.getElementById('spin-again-btn')?.addEventListener('click', () => {
+    if (!adminMode) return;
     state.nextMeeting.chosenBook = null;
     save();
     startSpin();
@@ -519,10 +652,11 @@ function renderHistory() {
 
   document.getElementById('tab-history').innerHTML = `
     <h2>Meeting History</h2>
+    ${adminMode ? `
     <div class="add-meeting-bar">
       <input type="date" id="new-meeting-date" value="${currentDate()}" class="text-input">
       <button class="btn btn-primary" id="add-meeting-btn">Add Past Meeting</button>
-    </div>
+    </div>` : ''}
     <div class="history-list" id="history-list">
       ${renderNextMeetingCard()}
       ${sorted.length === 0
@@ -531,7 +665,7 @@ function renderHistory() {
     </div>
   `;
 
-  document.getElementById('add-meeting-btn').addEventListener('click', addMeeting);
+  document.getElementById('add-meeting-btn')?.addEventListener('click', addMeeting);
   attachHistoryEvents();
 }
 
@@ -546,7 +680,7 @@ function renderNextMeetingCard() {
       <div class="hc hc-next">
         <div class="hc-top">
           <div class="hc-date">Next Meeting</div>
-          <button class="btn btn-sm btn-primary" data-action="next-happened">Meeting happened ✓</button>
+          ${adminMode ? `<button class="btn btn-sm btn-primary" data-action="next-happened">Meeting happened ✓</button>` : ''}
         </div>
         <div class="hc-chosen">📖 ${chosenHtml}</div>
       </div>`;
@@ -629,10 +763,10 @@ function renderMeetingCard(m) {
     <div class="hc" data-id="${m.id}">
       <div class="hc-top">
         <div class="hc-date">${formatDate(m.date)}</div>
-        <div class="hc-btns">
+        ${adminMode ? `<div class="hc-btns">
           <button class="btn btn-sm" data-action="edit" data-id="${m.id}">Edit</button>
           <button class="btn btn-sm btn-danger" data-action="delete" data-id="${m.id}">Delete</button>
-        </div>
+        </div>` : ''}
       </div>
       <div class="hc-chosen">📖 ${chosenBookHtml(m.chosenBook)}</div>
       <div class="hc-attendees">Attended (${m.attendees.length}): ${escHtml(attendeeNames)}</div>
@@ -775,26 +909,21 @@ function renderMembers() {
 
   document.getElementById('tab-members').innerHTML = `
     <h2>Members</h2>
-    <p class="hint">Book suggestions carry over each session.</p>
+    <p class="hint">Add or update your book suggestion below. ${adminMode ? 'As admin you can also add and remove members.' : ''}</p>
+    ${adminMode ? `
     <div class="add-row">
       <input type="text" id="new-member-name" class="text-input" placeholder="Member name…" autocomplete="off">
       <button class="btn btn-primary" id="add-member-btn">Add Member</button>
-    </div>
+    </div>` : ''}
     <div class="members-list" id="members-list">${rows}</div>
-    <hr>
-    <h3>Data</h3>
-    <p class="hint">Export to download current member/meeting data. Import to overwrite all current data.</p>
-    <div class="data-row">
-      <button class="btn" id="export-btn">Export data</button>
-      <button class="btn" id="import-btn">Import data</button>
-    </div>
-    <input type="file" id="import-file" accept=".json" style="display:none">
   `;
 
-  document.getElementById('add-member-btn').addEventListener('click', addMember);
-  document.getElementById('new-member-name').addEventListener('keydown', e => {
-    if (e.key === 'Enter') addMember();
-  });
+  if (adminMode) {
+    document.getElementById('add-member-btn').addEventListener('click', addMember);
+    document.getElementById('new-member-name').addEventListener('keydown', e => {
+      if (e.key === 'Enter') addMember();
+    });
+  }
 
   document.getElementById('members-list').addEventListener('click', e => {
     const el = e.target.closest('[data-action]');
@@ -803,13 +932,8 @@ function renderMembers() {
     if (action === 'edit-member')   { editingMemberId = memberId; renderMembers(); }
     if (action === 'cancel-member') { editingMemberId = null;     renderMembers(); }
     if (action === 'save-member')   saveMemberBook(memberId);
-    if (action === 'remove')        removeMember(memberId);
+    if (action === 'remove' && adminMode) removeMember(memberId);
   });
-
-  document.getElementById('export-btn').addEventListener('click', exportData);
-  document.getElementById('import-btn').addEventListener('click', () =>
-    document.getElementById('import-file').click());
-  document.getElementById('import-file').addEventListener('change', e => importData(e.target));
 }
 
 function renderMemberRow(m) {
@@ -831,7 +955,7 @@ function renderMemberRow(m) {
       <div class="mr-header">
         <span class="mr-name">${escHtml(m.name)}</span>
         <span class="mr-meetings">${meetingsAttended} meeting${meetingsAttended !== 1 ? 's' : ''}</span>
-        <button class="btn btn-sm btn-danger" data-action="remove" data-member-id="${m.id}">Remove</button>
+        ${adminMode ? `<button class="btn btn-sm btn-danger" data-action="remove" data-member-id="${m.id}">Remove</button>` : ''}
       </div>
       <div class="mr-book-section">
         ${bookSection}
@@ -946,6 +1070,7 @@ async function init() {
   document.getElementById('tab-history').innerHTML = '<p class="empty" style="padding:24px">Connecting…</p>';
   await loadMeta();
   await subscribeToClub();
+  loadAdminMode();
   renderClubSelector();
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
