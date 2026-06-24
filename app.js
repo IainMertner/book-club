@@ -21,6 +21,23 @@ for (let i = SHUFFLED_COLORS.length - 1; i > 0; i--) {
 }
 
 
+// ── Club meta (which clubs exist, which is active) ───────
+let currentClub = '';
+let clubList    = [];
+
+function loadMeta() {
+  try {
+    const raw = localStorage.getItem('bookclub-meta');
+    if (raw) { const d = JSON.parse(raw); clubList = d.clubs || []; currentClub = d.active || ''; }
+  } catch (e) {}
+  if (clubList.length === 0) { clubList = ['Book Club 1']; currentClub = 'Book Club 1'; saveMeta(); }
+  if (!clubList.includes(currentClub)) currentClub = clubList[0];
+}
+
+function saveMeta() {
+  localStorage.setItem('bookclub-meta', JSON.stringify({ clubs: clubList, active: currentClub }));
+}
+
 // ── State ───────────────────────────────────────────────
 let state = {
   members:     [],  // { id, name, currentBook, currentAuthor, bookUpdatedAt }
@@ -37,7 +54,7 @@ let wheelShowWeights    = false;
 
 // ── Persistence ──────────────────────────────────────────
 function save() {
-  localStorage.setItem('bookclub-v1', JSON.stringify({
+  localStorage.setItem(`bookclub-v1-${currentClub}`, JSON.stringify({
     members:     state.members,
     meetings:    state.meetings,
     nextMeeting: state.nextMeeting,
@@ -45,8 +62,9 @@ function save() {
 }
 
 function load() {
+  state = { members: [], meetings: [], nextMeeting: { chosenBook: null } };
   try {
-    const raw = localStorage.getItem('bookclub-v1');
+    const raw = localStorage.getItem(`bookclub-v1-${currentClub}`);
     if (!raw) return;
     const d = JSON.parse(raw);
     state.members     = d.members     || [];
@@ -316,6 +334,79 @@ function doSpin(segments, displaySegments, canvasEl, onDone) {
     }
   }
   requestAnimationFrame(frame);
+}
+
+// ── Club Selector ────────────────────────────────────────
+function renderClubSelector() {
+  const el = document.getElementById('club-selector');
+  if (!el) return;
+  el.innerHTML = `
+    <select id="club-select" class="club-select">
+      ${clubList.map(c => `<option value="${escHtml(c)}"${c === currentClub ? ' selected' : ''}>${escHtml(c)}</option>`).join('')}
+      <option value="__new__">+ New club…</option>
+    </select>
+    <button id="club-rename-btn" class="club-rename-btn" title="Rename club">✎</button>
+    <button id="club-delete-btn" class="club-rename-btn" title="Delete club" ${clubList.length === 1 ? 'disabled' : ''}>🗑</button>`;
+  document.getElementById('club-select').addEventListener('change', e => {
+    const val = e.target.value;
+    if (val === '__new__') createClub();
+    else switchClub(val);
+  });
+  document.getElementById('club-rename-btn').addEventListener('click', renameClub);
+  document.getElementById('club-delete-btn').addEventListener('click', deleteClub);
+}
+
+function deleteClub() {
+  if (clubList.length === 1) return;
+  if (!confirm(`Delete "${currentClub}" and all its data? This cannot be undone.`)) return;
+  localStorage.removeItem(`bookclub-v1-${currentClub}`);
+  clubList.splice(clubList.indexOf(currentClub), 1);
+  currentClub = clubList[0];
+  saveMeta();
+  load();
+  editingMeetingId = null; editingMemberId = null; nextMeetingExpanded = false;
+  renderClubSelector();
+  renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
+  toast('Club deleted.', 'success');
+}
+
+function renameClub() {
+  const name = prompt('Rename club to:', currentClub)?.trim();
+  if (!name || name === currentClub) { renderClubSelector(); return; }
+  if (clubList.includes(name)) { toast('A club with that name already exists.', 'error'); return; }
+  const oldKey = `bookclub-v1-${currentClub}`;
+  const data   = localStorage.getItem(oldKey);
+  clubList[clubList.indexOf(currentClub)] = name;
+  currentClub = name;
+  if (data) localStorage.setItem(`bookclub-v1-${currentClub}`, data);
+  localStorage.removeItem(oldKey);
+  saveMeta();
+  renderClubSelector();
+  toast('Club renamed.', 'success');
+}
+
+function switchClub(name) {
+  if (name === currentClub) return;
+  save();
+  currentClub = name;
+  saveMeta();
+  editingMeetingId = null; editingMemberId = null; nextMeetingExpanded = false;
+  load();
+  renderClubSelector();
+  renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
+}
+
+function createClub() {
+  const name = prompt('New club name:')?.trim();
+  if (!name) { renderClubSelector(); return; }
+  if (clubList.includes(name)) { toast('A club with that name already exists.', 'error'); renderClubSelector(); return; }
+  save();
+  clubList.push(name);
+  currentClub = name;
+  saveMeta();
+  load();
+  renderClubSelector();
+  renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
 }
 
 // ── Tab System ───────────────────────────────────────────
@@ -825,7 +916,9 @@ function importData(input) {
 
 // ── Init ─────────────────────────────────────────────────
 function init() {
+  loadMeta();
   load();
+  renderClubSelector();
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
   });
