@@ -1,3 +1,16 @@
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey:            'AIzaSyAUSbC8zJUgZF6IFdCtgIF8V57Js6sj1f8',
+  authDomain:        'book-club-b411a.firebaseapp.com',
+  projectId:         'book-club-b411a',
+  storageBucket:     'book-club-b411a.firebasestorage.app',
+  messagingSenderId: '93293269272',
+  appId:             '1:93293269272:web:f32f8fedf6d4ff17e48e6d',
+};
+const db = getFirestore(initializeApp(firebaseConfig));
+
 // ──────────────────────────────────────────────────────────
 // Book Club Wheel
 // ──────────────────────────────────────────────────────────
@@ -21,21 +34,29 @@ for (let i = SHUFFLED_COLORS.length - 1; i > 0; i--) {
 }
 
 
-// ── Club meta (which clubs exist, which is active) ───────
-let currentClub = '';
-let clubList    = [];
+// ── Club meta ─────────────────────────────────────────────
+let currentClubId = localStorage.getItem('bookclub-active') || '';
+let currentClub   = '';   // display name, derived from clubList
+let clubList      = [];   // [{ id, name }]
+let _unsubClub    = null;
 
-function loadMeta() {
-  try {
-    const raw = localStorage.getItem('bookclub-meta');
-    if (raw) { const d = JSON.parse(raw); clubList = d.clubs || []; currentClub = d.active || ''; }
-  } catch (e) {}
-  if (clubList.length === 0) { clubList = ['Book Club 1']; currentClub = 'Book Club 1'; saveMeta(); }
-  if (!clubList.includes(currentClub)) currentClub = clubList[0];
+async function loadMeta() {
+  const snap = await getDoc(doc(db, 'meta', 'clublist'));
+  clubList = snap.exists() ? (snap.data().clubs || []) : [];
+  if (clubList.length === 0) {
+    const id = uid();
+    clubList = [{ id, name: 'Book Club 1' }];
+    await setDoc(doc(db, 'meta', 'clublist'), { clubs: clubList });
+    await setDoc(doc(db, 'clubs', id), { name: 'Book Club 1', members: [], meetings: [], nextMeeting: { chosenBook: null } });
+  }
+  if (!clubList.find(c => c.id === currentClubId)) currentClubId = clubList[0].id;
+  currentClub = clubList.find(c => c.id === currentClubId)?.name || '';
+  localStorage.setItem('bookclub-active', currentClubId);
 }
 
 function saveMeta() {
-  localStorage.setItem('bookclub-meta', JSON.stringify({ clubs: clubList, active: currentClub }));
+  setDoc(doc(db, 'meta', 'clublist'), { clubs: clubList })
+    .catch(e => console.error('saveMeta failed:', e));
 }
 
 // ── State ───────────────────────────────────────────────
@@ -54,23 +75,26 @@ let wheelShowWeights    = false;
 
 // ── Persistence ──────────────────────────────────────────
 function save() {
-  localStorage.setItem(`bookclub-v1-${currentClub}`, JSON.stringify({
-    members:     state.members,
-    meetings:    state.meetings,
-    nextMeeting: state.nextMeeting,
-  }));
+  setDoc(doc(db, 'clubs', currentClubId), {
+    name: currentClub, members: state.members,
+    meetings: state.meetings, nextMeeting: state.nextMeeting,
+  }).catch(e => console.error('Save failed:', e));
 }
 
-function load() {
-  state = { members: [], meetings: [], nextMeeting: { chosenBook: null } };
-  try {
-    const raw = localStorage.getItem(`bookclub-v1-${currentClub}`);
-    if (!raw) return;
-    const d = JSON.parse(raw);
-    state.members     = d.members     || [];
-    state.meetings    = d.meetings    || [];
-    state.nextMeeting = d.nextMeeting || { chosenBook: null };
-  } catch (e) { console.error('Failed to load data:', e); }
+function subscribeToClub() {
+  if (_unsubClub) { _unsubClub(); _unsubClub = null; }
+  return new Promise(resolve => {
+    let resolved = false;
+    _unsubClub = onSnapshot(doc(db, 'clubs', currentClubId), snap => {
+      const d = snap.exists() ? snap.data() : {};
+      state.members     = d.members     || [];
+      state.meetings    = d.meetings    || [];
+      state.nextMeeting = d.nextMeeting || { chosenBook: null };
+      if (!resolved) { resolved = true; resolve(); return; }
+      if (!snap.metadata.hasPendingWrites)
+        renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
+    });
+  });
 }
 
 // ── Utilities ────────────────────────────────────────────
@@ -342,7 +366,7 @@ function renderClubSelector() {
   if (!el) return;
   el.innerHTML = `
     <select id="club-select" class="club-select">
-      ${clubList.map(c => `<option value="${escHtml(c)}"${c === currentClub ? ' selected' : ''}>${escHtml(c)}</option>`).join('')}
+      ${clubList.map(c => `<option value="${escHtml(c.id)}"${c.id === currentClubId ? ' selected' : ''}>${escHtml(c.name)}</option>`).join('')}
       <option value="__new__">+ New club…</option>
     </select>
     <button id="club-rename-btn" class="club-rename-btn" title="Rename club">✎</button>
@@ -356,57 +380,60 @@ function renderClubSelector() {
   document.getElementById('club-delete-btn').addEventListener('click', deleteClub);
 }
 
-function deleteClub() {
-  if (clubList.length === 1) return;
-  if (!confirm(`Delete "${currentClub}" and all its data? This cannot be undone.`)) return;
-  localStorage.removeItem(`bookclub-v1-${currentClub}`);
-  clubList.splice(clubList.indexOf(currentClub), 1);
-  currentClub = clubList[0];
-  saveMeta();
-  load();
+async function switchClub(id) {
+  if (id === currentClubId) return;
+  currentClubId = id;
+  currentClub   = clubList.find(c => c.id === id)?.name || '';
+  localStorage.setItem('bookclub-active', currentClubId);
   editingMeetingId = null; editingMemberId = null; nextMeetingExpanded = false;
+  await subscribeToClub();
   renderClubSelector();
   renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
-  toast('Club deleted.', 'success');
+}
+
+async function createClub() {
+  const name = prompt('New club name:')?.trim();
+  if (!name) { renderClubSelector(); return; }
+  if (clubList.find(c => c.name === name)) { toast('A club with that name already exists.', 'error'); renderClubSelector(); return; }
+  const id = uid();
+  clubList.push({ id, name });
+  currentClubId = id;
+  currentClub   = name;
+  saveMeta();
+  await setDoc(doc(db, 'clubs', id), { name, members: [], meetings: [], nextMeeting: { chosenBook: null } });
+  localStorage.setItem('bookclub-active', currentClubId);
+  await subscribeToClub();
+  renderClubSelector();
+  renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
 }
 
 function renameClub() {
   const name = prompt('Rename club to:', currentClub)?.trim();
   if (!name || name === currentClub) { renderClubSelector(); return; }
-  if (clubList.includes(name)) { toast('A club with that name already exists.', 'error'); return; }
-  const oldKey = `bookclub-v1-${currentClub}`;
-  const data   = localStorage.getItem(oldKey);
-  clubList[clubList.indexOf(currentClub)] = name;
+  if (clubList.find(c => c.name === name)) { toast('A club with that name already exists.', 'error'); return; }
+  const entry = clubList.find(c => c.id === currentClubId);
+  if (entry) entry.name = name;
   currentClub = name;
-  if (data) localStorage.setItem(`bookclub-v1-${currentClub}`, data);
-  localStorage.removeItem(oldKey);
   saveMeta();
+  updateDoc(doc(db, 'clubs', currentClubId), { name }).catch(e => console.error('Rename failed:', e));
   renderClubSelector();
   toast('Club renamed.', 'success');
 }
 
-function switchClub(name) {
-  if (name === currentClub) return;
-  save();
-  currentClub = name;
+async function deleteClub() {
+  if (clubList.length === 1) return;
+  if (!confirm(`Delete "${currentClub}" and all its data? This cannot be undone.`)) return;
+  await deleteDoc(doc(db, 'clubs', currentClubId));
+  clubList = clubList.filter(c => c.id !== currentClubId);
+  currentClubId = clubList[0].id;
+  currentClub   = clubList[0].name;
   saveMeta();
+  localStorage.setItem('bookclub-active', currentClubId);
   editingMeetingId = null; editingMemberId = null; nextMeetingExpanded = false;
-  load();
+  await subscribeToClub();
   renderClubSelector();
   renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
-}
-
-function createClub() {
-  const name = prompt('New club name:')?.trim();
-  if (!name) { renderClubSelector(); return; }
-  if (clubList.includes(name)) { toast('A club with that name already exists.', 'error'); renderClubSelector(); return; }
-  save();
-  clubList.push(name);
-  currentClub = name;
-  saveMeta();
-  load();
-  renderClubSelector();
-  renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
+  toast('Club deleted.', 'success');
 }
 
 // ── Tab System ───────────────────────────────────────────
@@ -915,9 +942,10 @@ function importData(input) {
 }
 
 // ── Init ─────────────────────────────────────────────────
-function init() {
-  loadMeta();
-  load();
+async function init() {
+  document.getElementById('tab-history').innerHTML = '<p class="empty" style="padding:24px">Connecting…</p>';
+  await loadMeta();
+  await subscribeToClub();
   renderClubSelector();
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
@@ -925,4 +953,8 @@ function init() {
   renderHistory();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => init().catch(e => {
+  console.error('Init failed:', e);
+  document.getElementById('tab-history').innerHTML =
+    '<p class="empty" style="padding:24px;color:var(--error)">Failed to connect to database. Check your internet connection and refresh.</p>';
+}));
