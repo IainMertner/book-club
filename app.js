@@ -89,6 +89,7 @@ let editingMeetingId    = null;
 let editingMemberId     = null;
 let nextMeetingExpanded = false;
 let wheelShowWeights    = false;
+let tempSpinResult      = null;  // non-admin fun spin result (not saved)
 
 // ── Persistence ──────────────────────────────────────────
 function save() {
@@ -401,7 +402,7 @@ async function switchClub(id) {
   currentClubId = id;
   currentClub   = clubList.find(c => c.id === id)?.name || '';
   localStorage.setItem('bookclub-active', currentClubId);
-  editingMeetingId = null; editingMemberId = null; nextMeetingExpanded = false;
+  editingMeetingId = null; editingMemberId = null; nextMeetingExpanded = false; tempSpinResult = null;
   await subscribeToClub();
   loadAdminMode();
   renderClubSelector();
@@ -589,12 +590,23 @@ function renderSpin() {
   wheel.segments = spinSegs;
 
   const chosen = state.nextMeeting.chosenBook;
+
+  // Admin: persistent saved result; non-admin: temporary fun result
   const winnerPanel = chosen ? `
     <div class="spin-result-panel">
       <p class="winner-label">Next book…</p>
       <div class="winner-name">${escHtml(getMember(chosen.memberId)?.name ?? '?')}</div>
       <div class="winner-book">"${escHtml(chosen.title)}"${chosen.author ? `<div class="winner-author">by ${escHtml(chosen.author)}</div>` : ''}</div>
       <p class="hint" style="margin-top:8px">Go to <strong>History</strong> to record this meeting once it happens.</p>
+      <div class="winner-btns">
+        <button class="btn" id="spin-again-btn">Spin Again</button>
+      </div>
+    </div>`
+  : tempSpinResult ? `
+    <div class="spin-result-panel spin-result-fun">
+      <p class="winner-label">🎉 The wheel chose…</p>
+      <div class="winner-name">${escHtml(tempSpinResult.name)}</div>
+      <div class="winner-book">"${escHtml(tempSpinResult.book)}"${tempSpinResult.author ? `<div class="winner-author">by ${escHtml(tempSpinResult.author)}</div>` : ''}</div>
       <div class="winner-btns">
         <button class="btn" id="spin-again-btn">Spin Again</button>
       </div>
@@ -611,11 +623,9 @@ function renderSpin() {
         <div class="wheel-pointer">▼</div>
         <canvas id="wheel-canvas" width="360" height="360"></canvas>
       </div>
-      ${adminMode ? `
-        <button class="btn-spin" id="spin-btn" ${spinSegs.length === 0 ? 'disabled' : ''}>SPIN!</button>
-        <button class="btn btn-sm" id="weights-toggle-btn">${wheelShowWeights ? 'Hide weights' : 'Show weights'}</button>
-        ${spinSegs.length === 0 ? '<p class="empty" style="margin-top:12px">Members need a book suggestion to enter the draw.</p>' : ''}
-      ` : '<p class="hint" style="margin-top:12px">Only an admin can spin the wheel.</p>'}
+      <button class="btn-spin" id="spin-btn" ${spinSegs.length === 0 ? 'disabled' : ''}>SPIN!</button>
+      ${adminMode ? `<button class="btn btn-sm" id="weights-toggle-btn">${wheelShowWeights ? 'Hide weights' : 'Show weights'}</button>` : ''}
+      ${spinSegs.length === 0 ? '<p class="empty" style="margin-top:12px">Members need a book suggestion to enter the draw.</p>' : ''}
     </div>
     ${winnerPanel}
   `;
@@ -629,9 +639,8 @@ function renderSpin() {
     renderSpin();
   });
   document.getElementById('spin-again-btn')?.addEventListener('click', () => {
-    if (!adminMode) return;
-    state.nextMeeting.chosenBook = null;
-    save();
+    if (adminMode) { state.nextMeeting.chosenBook = null; save(); }
+    else { tempSpinResult = null; }
     startSpin();
   });
 }
@@ -639,11 +648,18 @@ function renderSpin() {
 function startSpin() {
   const canvas = document.getElementById('wheel-canvas');
   if (!canvas || wheel.spinning || wheel.segments.length === 0) return;
+  tempSpinResult = null;
   document.getElementById('spin-btn').disabled = true;
-  const displaySegs = getDisplaySegs(wheel.segments);
+  const displaySegs = adminMode ? getDisplaySegs(wheel.segments) : wheel.segments.map(s => ({
+    ...s, normalizedWeight: wheel.segments.length > 0 ? 1 / wheel.segments.length : 0,
+  }));
   doSpin(wheel.segments, displaySegs, canvas, winner => {
-    state.nextMeeting.chosenBook = { memberId: winner.memberId, title: winner.book, author: winner.author, url: winner.url };
-    save();
+    if (adminMode) {
+      state.nextMeeting.chosenBook = { memberId: winner.memberId, title: winner.book, author: winner.author, url: winner.url };
+      save();
+    } else {
+      tempSpinResult = winner;
+    }
     renderSpin();
   });
 }
@@ -683,6 +699,7 @@ function renderNextMeetingCard() {
         <div class="hc-top">
           <div class="hc-date">Next Meeting</div>
           ${adminMode ? `<button class="btn btn-sm btn-primary" data-action="next-happened">Meeting happened ✓</button>` : ''}
+          ${adminMode && chosen ? `<button class="btn btn-sm btn-danger" data-action="next-clear">Clear result</button>` : ''}
         </div>
         <div class="hc-chosen">📖 ${chosenHtml}</div>
       </div>`;
@@ -846,6 +863,7 @@ function attachHistoryEvents() {
     const { action, id } = el.dataset;
     if (action === 'next-happened') { nextMeetingExpanded = true;  renderHistory(); }
     if (action === 'next-cancel')   { nextMeetingExpanded = false; renderHistory(); }
+    if (action === 'next-clear')    { state.nextMeeting.chosenBook = null; save(); renderHistory(); }
     if (action === 'next-save')     confirmNextMeeting();
     if (action === 'edit')          { editingMeetingId = id; renderHistory(); }
     if (action === 'cancel')        { editingMeetingId = null; renderHistory(); }
