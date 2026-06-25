@@ -34,6 +34,27 @@ for (let i = SHUFFLED_COLORS.length - 1; i > 0; i--) {
 }
 
 
+// ── Themes ───────────────────────────────────────────────
+const THEMES = {
+  red:    { label: 'Cherry Red',   primary: '#c14756', dark: '#a63744', light: '#fdf5f5', surface: '#f9eeee' },
+  purple: { label: 'Purple',       primary: '#7a67b8', dark: '#624f9e', light: '#f4f1fb', surface: '#ede9f7' },
+  blue:   { label: 'Ocean Blue',   primary: '#2e6db4', dark: '#1f5499', light: '#eef4fc', surface: '#eef4fc' },
+  teal:   { label: 'Teal',         primary: '#2a8a7a', dark: '#1e6b5e', light: '#edf7f5', surface: '#edf7f5' },
+  orange: { label: 'Burnt Orange', primary: '#d4622a', dark: '#b84e1e', light: '#fdf3ee', surface: '#fdf3ee' },
+};
+
+let currentTheme = 'red';
+
+function applyTheme(key) {
+  const t = THEMES[key] || THEMES.red;
+  const r = document.documentElement;
+  r.style.setProperty('--primary',       t.primary);
+  r.style.setProperty('--primary-dark',  t.dark);
+  r.style.setProperty('--primary-light', t.light);
+  r.style.setProperty('--surface',       t.surface);
+  currentTheme = key;
+}
+
 // ── Club meta ─────────────────────────────────────────────
 let currentClubId = localStorage.getItem('bookclub-active') || '';
 let currentClub   = '';   // display name, derived from clubList
@@ -109,6 +130,7 @@ function subscribeToClub() {
       state.meetings    = d.meetings    || [];
       state.nextMeeting = d.nextMeeting || { chosenBook: null };
       clubPasswordHash  = d.adminPassword || null;
+      applyTheme(d.theme || 'red');
       if (!resolved) { resolved = true; resolve(); return; }
       if (!snap.metadata.hasPendingWrites)
         renderTab(document.querySelector('.tab.active')?.dataset.tab || 'history');
@@ -471,6 +493,16 @@ function renderConfig() {
         </div>
       </div>
       <div class="config-section">
+        <h3>Colour theme</h3>
+        <div class="theme-swatches">
+          ${Object.entries(THEMES).map(([key, t]) => `
+            <button class="theme-swatch${currentTheme === key ? ' active' : ''}" data-theme="${key}">
+              <div class="theme-swatch-dot" style="background:${t.primary}"></div>
+              <span>${t.label}</span>
+            </button>`).join('')}
+        </div>
+      </div>
+      <div class="config-section">
         <h3>Password</h3>
         <button class="btn btn-sm" id="cfg-change-pwd-btn">Change password</button>
       </div>
@@ -496,6 +528,15 @@ function renderConfig() {
       renderConfig();
       const active = document.querySelector('.tab.active')?.dataset.tab;
       if (active && active !== 'config') renderTab(active);
+    });
+
+    document.querySelectorAll('[data-theme]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        applyTheme(btn.dataset.theme);
+        updateDoc(doc(db, 'clubs', currentClubId), { theme: currentTheme })
+          .catch(e => console.error('Theme save failed:', e));
+        renderConfig();
+      });
     });
 
   } else if (!clubPasswordHash) {

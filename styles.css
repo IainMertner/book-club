@@ -429,6 +429,25 @@ input[type="month"]:focus,
 .config-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .config-lock-form { display: flex; flex-direction: column; gap: 10px; max-width: 320px; }
 .config-error { color: var(--error); font-size: 0.88rem; min-height: 1.2em; }
+.theme-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  background: var(--bg);
+  font-size: 0.78rem;
+  color: var(--text);
+  transition: border-color 0.15s;
+}
+.theme-swatch:hover { border-color: var(--border); }
+.theme-swatch.active { border-color: var(--primary); }
+.theme-swatch-dot { width: 28px; height: 28px; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
+
 .goodreads-link {
   display: inline-block;
   font-size: 0.78rem;
