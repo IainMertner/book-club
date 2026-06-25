@@ -151,7 +151,8 @@ function chosenBookHtml(cb) {
   const name   = escHtml(getMember(cb.memberId)?.name ?? '?');
   const title  = escHtml(cb.title);
   const author = cb.author ? ` <span class="chosen-author">by ${escHtml(cb.author)}</span>` : '';
-  return `<strong>${name}</strong> - "${title}"${author}`;
+  const link   = cb.url   ? ` <a href="${escHtml(cb.url)}" target="_blank" rel="noopener" class="goodreads-link">Goodreads ↗</a>` : '';
+  return `<strong>${name}</strong> - "${title}"${author}${link}`;
 }
 
 // ── Weight Calculation ───────────────────────────────────
@@ -196,6 +197,7 @@ function computeWeights() {
       name:            member.name,
       book:            member.currentBook,
       author:          member.currentAuthor || '',
+      url:             member.currentBookUrl || '',
       color:           SHUFFLED_COLORS[idx % SHUFFLED_COLORS.length],
       attendanceScore: Math.round(attendanceScore * 100) / 100,
       selectionMult:   Math.round(selectionMult * 100) / 100,
@@ -640,7 +642,7 @@ function startSpin() {
   document.getElementById('spin-btn').disabled = true;
   const displaySegs = getDisplaySegs(wheel.segments);
   doSpin(wheel.segments, displaySegs, canvas, winner => {
-    state.nextMeeting.chosenBook = { memberId: winner.memberId, title: winner.book, author: winner.author };
+    state.nextMeeting.chosenBook = { memberId: winner.memberId, title: winner.book, author: winner.author, url: winner.url };
     save();
     renderSpin();
   });
@@ -660,7 +662,7 @@ function renderHistory() {
     <div class="history-list" id="history-list">
       ${renderNextMeetingCard()}
       ${sorted.length === 0
-        ? '<p class="empty" style="margin-top:16px">No past meetings yet.</p>'
+        ? '<p class="empty" style="margin-top:16px">No past meetings.</p>'
         : sorted.map(renderMeetingCard).join('')}
     </div>
   `;
@@ -726,6 +728,11 @@ function renderNextMeetingCard() {
         <input type="text" id="next-book-author" class="text-input"
                value="${escHtml(chosen?.author ?? '')}" placeholder="Author…" style="flex:1">
       </div>
+      <div class="edit-field-row">
+        <label>Goodreads</label>
+        <input type="url" id="next-book-url" class="text-input"
+               value="${escHtml(chosen?.url ?? '')}" placeholder="https://goodreads.com/book/…" style="flex:1">
+      </div>
       <div class="action-row">
         <button class="btn btn-success" data-action="next-save">Save</button>
         <button class="btn" data-action="next-cancel">Cancel</button>
@@ -742,10 +749,11 @@ function confirmNextMeeting() {
   const winnerId  = document.getElementById('next-winner').value;
   const title     = document.getElementById('next-book-title').value.trim();
   const author    = document.getElementById('next-book-author').value.trim();
+  const url       = document.getElementById('next-book-url').value.trim();
 
   state.meetings.push({
     id: uid(), date, attendees,
-    chosenBook: winnerId && title ? { memberId: winnerId, title, author } : null,
+    chosenBook: winnerId && title ? { memberId: winnerId, title, author, url } : null,
   });
   state.nextMeeting.chosenBook = null;
   nextMeetingExpanded = false;
@@ -778,6 +786,7 @@ function renderEditCard(m) {
   const chosenMemberId = m.chosenBook?.memberId ?? '';
   const chosenTitle    = m.chosenBook?.title    ?? '';
   const chosenAuthor   = m.chosenBook?.author   ?? '';
+  const chosenUrl      = m.chosenBook?.url      ?? '';
 
   const sortedMembers = [...state.members].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -815,6 +824,10 @@ function renderEditCard(m) {
         <label>Author</label>
         <input type="text" id="edit-book-author" class="text-input" value="${escHtml(chosenAuthor)}" placeholder="Author…" style="flex:1">
       </div>
+      <div class="edit-field-row">
+        <label>Goodreads</label>
+        <input type="url" id="edit-book-url" class="text-input" value="${escHtml(chosenUrl)}" placeholder="https://goodreads.com/book/…" style="flex:1">
+      </div>
       <div class="action-row">
         <button class="btn btn-primary" data-action="save" data-id="${m.id}">Save</button>
         <button class="btn" data-action="cancel" data-id="${m.id}">Cancel</button>
@@ -849,8 +862,10 @@ function attachHistoryEvents() {
       const isNext    = e.target.id === 'next-winner';
       const titleEl   = document.getElementById(isNext ? 'next-book-title'  : 'edit-book-title');
       const authorEl  = document.getElementById(isNext ? 'next-book-author' : 'edit-book-author');
-      if (titleEl  && member?.currentBook)   titleEl.value  = member.currentBook;
-      if (authorEl && member?.currentAuthor) authorEl.value = member.currentAuthor;
+      const urlEl     = document.getElementById(isNext ? 'next-book-url'    : 'edit-book-url');
+      if (titleEl  && member?.currentBook)    titleEl.value  = member.currentBook;
+      if (authorEl && member?.currentAuthor)  authorEl.value = member.currentAuthor;
+      if (urlEl    && member?.currentBookUrl) urlEl.value    = member.currentBookUrl;
     }
   });
 }
@@ -875,6 +890,7 @@ function saveMeetingEdit(id) {
   const winnerId  = document.getElementById('edit-winner').value;
   const title     = document.getElementById('edit-book-title').value.trim();
   const author    = document.getElementById('edit-book-author').value.trim();
+  const url       = document.getElementById('edit-book-url').value.trim();
 
   if (newDate && newDate !== meeting.date && getMeeting(newDate)) {
     toast('Another meeting already exists on that date.', 'error'); return;
@@ -882,7 +898,7 @@ function saveMeetingEdit(id) {
 
   if (newDate) meeting.date = newDate;
   meeting.attendees  = attendees;
-  meeting.chosenBook = winnerId && title ? { memberId: winnerId, title, author } : null;
+  meeting.chosenBook = winnerId && title ? { memberId: winnerId, title, author, url } : null;
 
   editingMeetingId = null;
   save();
@@ -944,6 +960,7 @@ function renderMemberRow(m) {
     ? `<div class="mr-book-display">
          <div class="mr-book-title">"${escHtml(m.currentBook)}"</div>
          ${m.currentAuthor ? `<div class="mr-book-author">by ${escHtml(m.currentAuthor)}</div>` : ''}
+         ${m.currentBookUrl ? `<a href="${escHtml(m.currentBookUrl)}" target="_blank" rel="noopener" class="goodreads-link">Goodreads ↗</a>` : ''}
          ${m.bookUpdatedAt ? `<div class="mr-book-meta">Updated ${formatDate(m.bookUpdatedAt)}</div>` : ''}
        </div>
        <button class="btn btn-sm" data-action="edit-member" data-member-id="${m.id}">Edit suggestion</button>`
@@ -981,6 +998,10 @@ function renderMemberEditRow(m) {
             <label>Author</label>
             <input type="text" id="mr-author-input" class="text-input" value="${escHtml(m.currentAuthor || '')}" placeholder="Author name…">
           </div>
+          <div class="mr-edit-field">
+            <label>Goodreads</label>
+            <input type="url" id="mr-url-input" class="text-input" value="${escHtml(m.currentBookUrl || '')}" placeholder="https://goodreads.com/book/…">
+          </div>
         </div>
         <div class="mr-edit-actions">
           <button class="btn btn-sm btn-primary" data-action="save-member" data-member-id="${m.id}">Save</button>
@@ -995,11 +1016,13 @@ function saveMemberBook(id) {
   if (!member) return;
   const title  = document.getElementById('mr-book-input').value.trim();
   const author = document.getElementById('mr-author-input').value.trim();
-  const changed = title !== (member.currentBook || '') || author !== (member.currentAuthor || '');
+  const url    = document.getElementById('mr-url-input').value.trim();
+  const changed = title !== (member.currentBook || '') || author !== (member.currentAuthor || '') || url !== (member.currentBookUrl || '');
   if (changed) {
-    member.currentBook   = title;
-    member.currentAuthor = author;
-    member.bookUpdatedAt = currentDate();
+    member.currentBook    = title;
+    member.currentAuthor  = author;
+    member.currentBookUrl = url;
+    member.bookUpdatedAt  = currentDate();
     save();
     toast('Updated.', 'success');
   }
@@ -1014,7 +1037,7 @@ function addMember() {
   if (state.members.some(m => m.name.toLowerCase() === name.toLowerCase())) {
     toast('Member already exists.', 'error'); return;
   }
-  state.members.push({ id: uid(), name, currentBook: '', currentAuthor: '', bookUpdatedAt: null });
+  state.members.push({ id: uid(), name, currentBook: '', currentAuthor: '', currentBookUrl: '', bookUpdatedAt: null });
   save();
   input.value = '';
   toast(`Added ${name}`, 'success');
